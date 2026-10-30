@@ -232,7 +232,7 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 									count = len(r.snap.Segments)
 								}
 							}
-							if (!r.pending && r.snap.State == download.Done) || r.snap.Total <= 0 || len(r.snap.Segments) == 0 || count <= 1 {
+							if (!r.pending && r.snap.State == download.Done) || r.snap.Total <= 0 || len(r.snap.Segments) <= 1 || count <= 1 {
 								count = 1
 							}
 							count = min(count, 32)

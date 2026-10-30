@@ -1600,6 +1600,9 @@ func (pg *mainPage) ovSegments(c *ui.Context, p *d1Palette, r d1Row) {
 	if !r.pending && r.snap.State == download.Done {
 		pills = 1
 	}
+	if len(r.snap.Segments) <= 1 {
+		pills = 1
+	}
 	pills = max(1, min(pills, 32))
 	total := r.snap.Total
 	fill := p.progressFill(pg.rowStatus(r))
