@@ -2,6 +2,7 @@
   "name": "OpenDL",
   "identifier": "com.example.opendl",
   "version": "0.1.0",
+  "main": "./cmd/opendl",
   "resources": ["extension"],
   "out": "build"
 }

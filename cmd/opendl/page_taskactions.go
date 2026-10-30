@@ -2,26 +2,23 @@ package main
 
 import (
 	"bytes"
-	_ "embed"
 	"image/png"
 	"strings"
 	"time"
 
 	"openDL/download"
+	"openDL/resources"
 	"openDL/style"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 )
 
-//go:embed resources/icon.png
-var appIconPNG []byte
-
 // appIconBitmap 与应用和托盘共用同一图标，进程内解码一次。
 var appIconBitmap = decodeAppIcon()
 
 func decodeAppIcon() *ui.Bitmap {
-	img, err := png.Decode(bytes.NewReader(appIconPNG))
+	img, err := png.Decode(bytes.NewReader(resources.IconPNG))
 	if err != nil {
 		return nil
 	}

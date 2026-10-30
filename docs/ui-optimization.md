@@ -6,7 +6,7 @@
 
 | 评估项 | 源码调整 | 主要位置 |
 | --- | --- | --- |
-| 2 选择计数 | 取消勾选时删除条目，统计真实勾选值；当前筛选与隐藏勾选分别提示；全选支持部分选中状态；过滤隐藏的活动行不继续触发单行操作 | `page_controls.go` 的 `setChecked`、`selectionCounts`；`page_main.go` 的 `view`、`d1TableHead` |
+| 2 选择计数 | 取消勾选时删除条目，统计真实勾选值；当前筛选与隐藏勾选分别提示；全选支持部分选中状态；过滤隐藏的活动行不继续触发单行操作 | `cmd/opendl/page_controls.go` 的 `setChecked`、`selectionCounts`；`cmd/opendl/page_main.go` 的 `view`、`d1TableHead` |
 | 3 操作与提示 | 类型/站点/日期是真实筛选；支持清除；站点入口可显式提取静态文件/媒体链接；移至夜间或主队列执行真实转移后反馈 | `filterControls`、`extractPage`、`pageLinks`、`moveQueue` |
 | 4 菜单动作 | 根据任务状态显示暂停、继续或打开文件；完成任务不重复显示打开动作；不可用动作禁用 | `primaryRowAction`、`contextMenu` |
 | 5 下载配置 | 目录输入、队列单选、来源页、HTTP 基本认证输入；配置传入对应任务；请求头展示真实配置且隐藏凭据 | `addDialog`、`submitDownloads`、`downloadRequest`、引擎 `Request` |
@@ -20,7 +20,7 @@
 | 13 键盘与语义 | 真实开关/单选/下拉/页签基础控件；任务表作用域快捷键；Shift+F10 打开菜单；菜单与页签键盘导航；图标按钮有名称和提示 | `taskShortcuts`、`d1Choice`、`d1Radio`、`detailPanel`、`contextMenu` |
 | 14 弹窗体验 | 使用 DialogBase 的模态焦点与键盘约束；输入错误原位展示、保留输入；计划任务草稿只在保存时提交；取消不修改已生效计划；异步提取拒绝过期结果 | `addDialog`、`schedDialog`、`submitDownloads`、`extractPage` |
 | 15 详情与长内容 | 保留三栏布局，支持折叠、按窗口高度限制并滚动；长值可选择和复制、可查看完整提示；侧栏导航独立滚动，保留底部磁盘卡片 | `detailPanel`、`kvList`、`sidebar` |
-| 16 共享实现 | 共享 Radix 语义色板；旧 Palette 和当前页面均通过适配取值；提取下拉、输入、单选、主按钮与状态判断；夜间任务使用稳定 ID；后台监听在窗口关闭后退出，UI 状态经 Window.Update 更新 | `style/rules.go`、`style/tokens.go`、`page_controls.go`、`nightWatch` |
+| 16 共享实现 | 共享 Radix 语义色板；旧 Palette 和当前页面均通过适配取值；提取下拉、输入、单选、主按钮与状态判断；夜间任务使用稳定 ID；后台监听在窗口关闭后退出，UI 状态经 Window.Update 更新 | `style/rules.go`、`style/tokens.go`、`cmd/opendl/page_controls.go`、`nightWatch` |
 | 17 证据与映射 | 更新设计规则和本表；历史评估与旧预览保留为历史证据，避免冒充本轮验证 | 本文、`design-rules.md`、`ui-review.md` |
 | 18 浏览器扩展图标 | 扩展全部 logo 统一为 `assets/cai-black.svg`：按 SVG 精确栅格化替换 `extension/icon.png`（1024×1024，黑底白字形，仅圆角处透明，与桌面端 `resources/icon.png` 同一套构图），两份 manifest 声明 `icons`；popup 标题 `↓` 字符改为内嵌 `icon.png`（28px，保留原 7px 圆角）。扩展不支持 SVG 图标，故以同源 SVG 栅格化产物代替 | `extension/icon.png`、`manifest.json`、`manifest-firefox.json`、`popup.html`、`popup.css` |
 
