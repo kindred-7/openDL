@@ -216,17 +216,24 @@ jobs:
             $body = @{ ref = "refs/tags/$env:RELEASE_TAG"; sha = $sha } | ConvertTo-Json -Compress
             Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/git/refs" -ContentType 'application/json' -Body $body | Out-Null
           }
-          try { $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag" }
-          catch {
-            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw 'Failed to inspect the GitHub release.' }
-            $release = $null
+          # Get-by-tag never returns drafts; list releases to find one by tag.
+          function Find-Release([string]$name) {
+            $found = $null
+            foreach ($item in @(Invoke-RestMethod -Headers $headers -Uri "$api/releases?per_page=100")) {
+              if ($item.tag_name -cne $name) { continue }
+              if (-not $item.draft) { return $item }
+              $found = $item
+            }
+            return $found
           }
           $notes = "docs/release-notes-$env:RELEASE_VERSION.md"
           if (-not (Test-Path -LiteralPath $notes)) { throw 'Release notes are missing.' }
+          $release = Find-Release $env:RELEASE_TAG
           if (-not $release) {
             & gh release create $env:RELEASE_TAG --repo $repo --verify-tag --draft --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes
             if ($LASTEXITCODE -ne 0) { throw 'Failed to create GitHub draft release.' }
-            $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
+            $release = Find-Release $env:RELEASE_TAG
+            if (-not $release) { throw 'The GitHub draft release is not visible after creation.' }
           }
           $installer = "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
           foreach ($name in @($installer, 'releases.json')) {
