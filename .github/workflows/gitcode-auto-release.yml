@@ -2,6 +2,8 @@ name: Publish GitCode releases
 
 on:
   push:
+    branches:
+      - main
     tags:
       - '*'
   schedule:
