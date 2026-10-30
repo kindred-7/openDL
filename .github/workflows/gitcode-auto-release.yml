@@ -216,24 +216,24 @@ jobs:
             $body = @{ ref = "refs/tags/$env:RELEASE_TAG"; sha = $sha } | ConvertTo-Json -Compress
             Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/git/refs" -ContentType 'application/json' -Body $body | Out-Null
           }
-          # Get-by-tag never returns drafts; list releases to find one by tag.
-          function Find-Release([string]$name) {
-            $found = $null
-            foreach ($item in @(Invoke-RestMethod -Headers $headers -Uri "$api/releases?per_page=100")) {
-              if ($item.tag_name -cne $name) { continue }
-              if (-not $item.draft) { return $item }
-              $found = $item
-            }
-            return $found
-          }
+          # Draft releases are invisible to get-by-tag and to this token's
+          # release listing, so publish directly and look releases up by tag
+          # only. A pre-existing draft is adopted instead of a duplicate.
           $notes = "docs/release-notes-$env:RELEASE_VERSION.md"
           if (-not (Test-Path -LiteralPath $notes)) { throw 'Release notes are missing.' }
-          $release = Find-Release $env:RELEASE_TAG
+          $release = $null
+          try { $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag" }
+          catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw 'Failed to inspect the GitHub release.' }
+          }
           if (-not $release) {
-            & gh release create $env:RELEASE_TAG --repo $repo --verify-tag --draft --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to create GitHub draft release.' }
-            $release = Find-Release $env:RELEASE_TAG
-            if (-not $release) { throw 'The GitHub draft release is not visible after creation.' }
+            & gh release create $env:RELEASE_TAG --repo $repo --verify-tag --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes (Join-Path 'release-assets' "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe") (Join-Path 'release-assets' 'releases.json')
+            if ($LASTEXITCODE -ne 0) {
+              # 该标签已有草稿发布时补全并转为正式发布，其余失败仍报错。
+              & gh release edit $env:RELEASE_TAG --repo $repo --draft=false --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes
+              if ($LASTEXITCODE -ne 0) { throw 'Failed to create the GitHub release.' }
+            }
+            $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
           }
           $installer = "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
           foreach ($name in @($installer, 'releases.json')) {
@@ -244,15 +244,13 @@ jobs:
               $temp = Join-Path $env:RUNNER_TEMP ('opendl-github-' + [guid]::NewGuid().ToString('N'))
               New-Item -ItemType Directory -Path $temp | Out-Null
               try {
-                & gh release download $env:RELEASE_TAG --repo $repo --pattern $name --dir $temp
-                if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath (Join-Path $temp $name) -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash) { throw "Existing GitHub asset differs: $name" }
+                $dest = Join-Path $temp $name
+                Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $existing[0].url -OutFile $dest
+                if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash) { throw "Existing GitHub asset differs: $name" }
               } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
-            } elseif ($release.draft) {
-              & gh release upload $env:RELEASE_TAG $local --repo $repo
-              if ($LASTEXITCODE -ne 0) { throw "Failed to upload GitHub asset: $name" }
-            } else { throw "Published GitHub release is missing $name; it will not be modified." }
-          }
-          if ($release.draft) {
-            & gh release edit $env:RELEASE_TAG --repo $repo --draft=false
-            if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the GitHub draft release.' }
+            } else {
+              # 补传缺失资产以便断点重跑；已存在的资产永不替换。
+              $upload = ($release.upload_url -replace '\{\?name,label\}$', '') + '?name=' + [Uri]::EscapeDataString($name)
+              Invoke-RestMethod -Method Post -Headers $headers -Uri $upload -ContentType 'application/octet-stream' -Body ([IO.File]::ReadAllBytes($local)) | Out-Null
+            }
           }
