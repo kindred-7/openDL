@@ -41,8 +41,13 @@ if ($payload.notes -cne $notes) { throw 'Release notes do not match the signed m
 
 $remoteTag = & git ls-remote --tags https://gitcode.com/kindred-wu/openDL.git "refs/tags/$Tag"
 if ($LASTEXITCODE -ne 0 -or -not $remoteTag) { throw "Remote tag $Tag was not found. Push the version tag before publishing." }
-$secureToken = Read-Host 'GitCode access token (input is hidden)' -AsSecureString
-$token = [System.Net.NetworkCredential]::new('', $secureToken).Password
+$secureToken = $null
+if ($env:GITCODE_TOKEN) {
+    $token = $env:GITCODE_TOKEN
+} else {
+    $secureToken = Read-Host 'GitCode access token (input is hidden)' -AsSecureString
+    $token = [System.Net.NetworkCredential]::new('', $secureToken).Password
+}
 if (-not $token) { throw 'An access token is required.' }
 $tokenEncoded = [Uri]::EscapeDataString($token)
 $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
@@ -78,7 +83,7 @@ try {
     $body = @{ name = "OpenDL $version"; body = $notes; release_status = 'latest' } | ConvertTo-Json -Compress
     try { Invoke-RestMethod -Method Patch -Uri "${releasePath}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) | Out-Null }
     catch { throw 'Files were uploaded, but marking the release as latest failed.' }
-    Write-Host "Published OpenDL $version: https://gitcode.com/kindred-wu/openDL/releases"
+    Write-Host "Published OpenDL ${version}: https://gitcode.com/kindred-wu/openDL/releases"
 } catch {
     if ($created) { Write-Warning "A prerelease may exist for $Tag. Inspect it on GitCode before retrying; the script does not replace existing releases." }
     throw $_.Exception.Message
