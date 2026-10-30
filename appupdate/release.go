@@ -456,6 +456,24 @@ func client(transport http.RoundTripper) *http.Client {
 	}}
 }
 
+// statusError 把更新请求的 HTTP 状态码翻译成面向用户的提示；
+// 未知状态码保留编号，便于反馈排查。
+func statusError(status int) error {
+	switch {
+	case status == http.StatusTooManyRequests:
+		return i18n.NewError("检查过于频繁，请稍后再试")
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return i18n.NewError("更新服务器拒绝了本次请求，请稍后再试")
+	case status == http.StatusNotFound:
+		return i18n.NewError("未找到更新信息，请检查更新源设置")
+	case status == http.StatusRequestTimeout || status == http.StatusGatewayTimeout:
+		return i18n.NewError("更新服务器响应超时，请稍后再试")
+	case status >= 500:
+		return i18n.NewError("更新服务器暂时不可用，请稍后再试")
+	}
+	return fmt.Errorf(i18n.T("更新服务器返回异常状态，请稍后再试（HTTP %d）"), status)
+}
+
 func get(ctx context.Context, address string, transport http.RoundTripper) (*http.Response, error) {
 	if err := secureURL(address); err != nil {
 		return nil, err
@@ -471,7 +489,7 @@ func get(ctx context.Context, address string, transport http.RoundTripper) (*htt
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf(i18n.T("更新服务器返回 HTTP %d"), resp.StatusCode)
+		return nil, statusError(resp.StatusCode)
 	}
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		resp.Body.Close()
