@@ -32,7 +32,7 @@ function Remove-SharedFiles {
     Write-Host "仍有浏览器注册，保留共享文件: $($leftover -join ', ')"
     return
   }
-  foreach ($file in @((Join-Path $install "$HostName.json"), (Join-Path $install "$HostName-firefox.json"), (Join-Path $install "idmhost.exe"))) {
+  foreach ($file in @((Join-Path $install "$HostName.json"), (Join-Path $install "$HostName-firefox.json"), (Join-Path $install "opendl-host.exe"))) {
     if (Test-Path $file) {
       Remove-Item -Path $file -Force
       Write-Host "已删除文件: $file"

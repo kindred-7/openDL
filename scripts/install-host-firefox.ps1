@@ -16,11 +16,12 @@ $root = Split-Path -Parent $PSScriptRoot
 $install = Join-Path $env:LOCALAPPDATA "opendl"
 New-Item -ItemType Directory -Force -Path $install | Out-Null
 
-$exe = Join-Path $install "idmhost.exe"
-if (-not (Test-Path $exe)) {
-  Push-Location $root
-  go build -o $exe .\cmd\idmhost
-  if ($LASTEXITCODE -ne 0) { Pop-Location; throw "go build idmhost failed" }
+$exe = Join-Path $install "opendl-host.exe"
+Push-Location $root
+try {
+  go build -o $exe .\cmd\opendl-host
+  if ($LASTEXITCODE -ne 0) { throw "go build opendl-host failed" }
+} finally {
   Pop-Location
 }
 
