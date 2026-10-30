@@ -6,7 +6,7 @@
 
 1. 从 `extension` 制作干净的 ZIP：文件直接放在 ZIP 根目录，不要包含外层 `extension` 文件夹、测试文件、安装说明或其他非运行文件。保留清单引用的脚本、图标和 `_locales` 目录。
 2. Chrome 和 Edge 使用 `manifest.json`；Firefox 使用单独副本，将 `manifest-firefox.json` 作为副本的 `manifest.json`，不要修改原文件。检查版本号、图标、本地化、权限和商店要求。
-3. 正式版使用固定身份。Chromium 清单中的公钥对应原生主机当前允许的 ID `gfimibmmfmmhhjfioegmhbkmkhoefleo`；若商店分配的 ID 不同，必须同步调整 `nativehost/register_windows.go` 的允许来源和调用识别逻辑。Edge 与 Chrome 的 ID 可能不同，不能假设一致。Firefox 的 ID 为 `opendl@opendl.local`，也必须与原生主机允许列表一致。
+3. 正式版使用固定身份。Chromium 本地开发 ID 为 `gfimibmmfmmhhjfioegmhbkmkhoefleo`，Chrome 商店项目 ID 为 `gppemfjpooijagmiigefeonekdkiodah`；Windows 原生主机允许这两个来源。Edge 的 ID 可能不同，发布后需按实际 ID 同步调整 `nativehost/register_windows.go` 的允许来源和调用识别逻辑。Firefox 的 ID 为 `opendl@opendl.local`，也必须与原生主机允许列表一致。
 4. 准备扩展介绍、截图、支持联系方式及隐私政策。扩展请求 Cookie、下载和所有网站访问权限；提交时应逐项说明用途及数据处理方式，与实际行为一致。
 
 ## 提交商店

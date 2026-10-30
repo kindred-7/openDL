@@ -14,6 +14,7 @@ import (
 
 const hostName = "com.example.opendl"
 const chromeOrigin = "chrome-extension://gfimibmmfmmhhjfioegmhbkmkhoefleo/"
+const chromeStoreOrigin = "chrome-extension://gppemfjpooijagmiigefeonekdkiodah/"
 
 func manifestDir() string { return filepath.Join(os.Getenv("LOCALAPPDATA"), "opendl") }
 
@@ -23,7 +24,7 @@ func IsBrowserInvocation(args []string) bool {
 	if len(args) == 0 {
 		return false
 	}
-	if args[0] == chromeOrigin {
+	if args[0] == chromeOrigin || args[0] == chromeStoreOrigin {
 		return true
 	}
 	return strings.EqualFold(filepath.Clean(args[0]), filepath.Join(manifestDir(), hostName+"-firefox.json"))
@@ -53,7 +54,7 @@ func Register() error {
 	}
 	base := hostManifest{Name: hostName, Description: "OpenDL native messaging host", Path: exe, Type: "stdio"}
 	chrome := base
-	chrome.AllowedOrigins = []string{chromeOrigin}
+	chrome.AllowedOrigins = []string{chromeOrigin, chromeStoreOrigin}
 	firefox := base
 	firefox.AllowedExtensions = []string{"opendl@opendl.local"}
 	for _, entry := range []struct {
