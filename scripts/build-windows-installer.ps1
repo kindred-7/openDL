@@ -29,12 +29,15 @@ try {
     if (-not $Makensis) { throw 'NSIS makensis.exe not found. Install NSIS or pass -Makensis.' }
     $output = Join-Path $stage "OpenDL.Setup.$($config.version).$Architecture.exe"
     $temporary = Join-Path ([IO.Path]::GetTempPath()) ("opendl-setup-" + [Guid]::NewGuid().ToString('N') + '.exe')
+    $icon = Join-Path ([IO.Path]::GetTempPath()) ("opendl-icon-" + [Guid]::NewGuid().ToString('N') + '.ico')
     try {
-        & $Makensis "/DSTAGE=$stage" "/DOUTPUT=$temporary" "/DVERSION=$($config.version)" "/DHELPER=$(Join-Path $PSScriptRoot 'installer-stop.ps1')" (Join-Path $PSScriptRoot 'windows-installer.nsi')
+        & (Join-Path $PSScriptRoot 'create-installer-icon.ps1') -Source (Join-Path $root 'resources/icon.png') -Output $icon
+        & $Makensis "/DSTAGE=$stage" "/DOUTPUT=$temporary" "/DVERSION=$($config.version)" "/DICON=$icon" "/DHELPER=$(Join-Path $PSScriptRoot 'installer-stop.ps1')" (Join-Path $PSScriptRoot 'windows-installer.nsi')
         if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $temporary)) { throw 'NSIS installer generation failed.' }
         Move-Item -LiteralPath $temporary -Destination $output -Force
     } finally {
         if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+        if (Test-Path -LiteralPath $icon) { Remove-Item -LiteralPath $icon -Force }
     }
     Write-Host "Installer: $output"
 } finally { Pop-Location }

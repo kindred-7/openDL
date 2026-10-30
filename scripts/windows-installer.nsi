@@ -9,6 +9,8 @@ InstallDir "$LOCALAPPDATA\Programs\OpenDL"
 InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\com.example.opendl" "InstallLocation"
 RequestExecutionLevel user
 !define MUI_ABORTWARNING
+!define MUI_ICON "${ICON}"
+!define MUI_UNICON "${ICON}"
 !define MUI_FINISHPAGE_RUN "$INSTDIR\OpenDL.exe"
 !define MUI_FINISHPAGE_SHOWREADME
 !define MUI_FINISHPAGE_SHOWREADME_TEXT "创建桌面快捷方式"

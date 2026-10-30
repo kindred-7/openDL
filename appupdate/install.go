@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -120,7 +121,13 @@ func DownloadInstaller(ctx context.Context, config Config, release *Release, cur
 	}
 	suffix := ""
 	if u, err := url.Parse(verified.Asset.URL); err == nil {
-		if ext := filepath.Ext(u.Path); len(ext) <= 16 && ext != "" {
+		name := u.Path
+		// GitCode's signed asset URL ends in /<filename>/download.
+		// Preserve the signed filename's suffix for ShellExecute on Windows.
+		if strings.EqualFold(path.Base(name), "download") {
+			name = path.Dir(name)
+		}
+		if ext := path.Ext(name); len(ext) <= 16 && ext != "" {
 			suffix = ext
 		}
 	}
