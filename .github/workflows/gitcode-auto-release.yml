@@ -1,6 +1,9 @@
 name: Publish GitCode releases
 
 on:
+  push:
+    tags:
+      - '*'
   schedule:
     - cron: '7,22,37,52 * * * *'
   workflow_dispatch:
