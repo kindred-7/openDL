@@ -24,10 +24,13 @@ import (
 const MaxArtifactSize int64 = 512 << 20
 
 type Config struct {
-	URL         string    `json:"url,omitempty"`
-	PublicKey   string    `json:"public_key,omitempty"`
-	Automatic   bool      `json:"automatic,omitempty"`
-	LastChecked time.Time `json:"last_checked,omitempty"`
+	URL         string             `json:"url,omitempty"`
+	PublicKey   string             `json:"public_key,omitempty"`
+	Provider    string             `json:"provider,omitempty"`
+	Automatic   bool               `json:"automatic"`
+	LastChecked time.Time          `json:"last_checked,omitempty"`
+	Transport   http.RoundTripper  `json:"-"`
+	Progress    func(int64, int64) `json:"-"`
 }
 
 type Envelope struct {
@@ -81,6 +84,9 @@ func secureURL(text string) error {
 }
 
 func (c Config) Validate() error {
+	if c.Provider != "" && c.Provider != "gitcode" {
+		return i18n.NewError("更新源类型无效")
+	}
 	if c.URL == "" && c.PublicKey == "" && !c.Automatic {
 		return nil
 	}
@@ -89,9 +95,71 @@ func (c Config) Validate() error {
 		if err := secureURL(c.URL); err != nil {
 			return err
 		}
+		if c.Provider == "gitcode" {
+			if _, err := gitcodeReleaseBase(c.URL); err != nil {
+				return err
+			}
+		}
 	}
 	_, err := signature.PublicKey(c.PublicKey)
 	return err
+}
+
+// gitcodeReleaseBase accepts only the public latest-release API endpoint.
+// Release metadata is untrusted; only the subsequently signed manifest can
+// authorize an artifact, its version, or its download URL.
+func gitcodeReleaseBase(address string) (string, error) {
+	u, err := url.Parse(address)
+	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Host, "api.gitcode.com") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", i18n.NewError("GitCode 更新源地址无效")
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) != 7 || parts[0] != "api" || parts[1] != "v5" || parts[2] != "repos" || parts[5] != "releases" || parts[6] != "latest" {
+		return "", i18n.NewError("GitCode 更新源地址无效")
+	}
+	for _, name := range parts[3:5] {
+		if name == "" || name == "." || name == ".." {
+			return "", i18n.NewError("GitCode 更新源地址无效")
+		}
+		for _, ch := range name {
+			if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_' || ch == '.') {
+				return "", i18n.NewError("GitCode 更新源地址无效")
+			}
+		}
+	}
+	return "https://api.gitcode.com/api/v5/repos/" + url.PathEscape(parts[3]) + "/" + url.PathEscape(parts[4]) + "/releases/", nil
+}
+
+func gitcodeManifestURL(ctx context.Context, config Config) (string, error) {
+	base, err := gitcodeReleaseBase(config.URL)
+	if err != nil {
+		return "", err
+	}
+	resp, err := get(ctx, config.URL, config.Transport)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (1<<20)+1))
+	if err != nil {
+		return "", err
+	}
+	if len(data) > 1<<20 {
+		return "", i18n.NewError("更新清单超过大小限制")
+	}
+	var metadata struct {
+		Tag        string `json:"tag_name"`
+		Prerelease bool   `json:"prerelease"`
+		Draft      bool   `json:"draft"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return "", err
+	}
+	version, err := parseSemVer(metadata.Tag)
+	if err != nil || len(version.pre) != 0 || metadata.Prerelease || metadata.Draft {
+		return "", i18n.NewError("GitCode 发行版本无效")
+	}
+	return base + url.PathEscape(metadata.Tag) + "/attach_files/releases.json/download", nil
 }
 
 // semVer 是 SemVer 2.0.0 的版本号：major.minor.patch[-prerelease][+build]。
@@ -379,8 +447,8 @@ func Decode(config Config, envelope Envelope, now time.Time) (*Release, error) {
 
 // A dedicated anonymous client never carries download credentials or cookies.
 // Environment proxy support follows net/http. HTTPS is enforced on every hop.
-func client() *http.Client {
-	return &http.Client{Timeout: 30 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+func client(transport http.RoundTripper) *http.Client {
+	return &http.Client{Transport: transport, Timeout: 30 * time.Minute, CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 8 {
 			return i18n.NewError("更新重定向次数过多")
 		}
@@ -388,7 +456,7 @@ func client() *http.Client {
 	}}
 }
 
-func get(ctx context.Context, address string) (*http.Response, error) {
+func get(ctx context.Context, address string, transport http.RoundTripper) (*http.Response, error) {
 	if err := secureURL(address); err != nil {
 		return nil, err
 	}
@@ -397,7 +465,7 @@ func get(ctx context.Context, address string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept-Encoding", "identity")
-	resp, err := client().Do(req)
+	resp, err := client(transport).Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -418,7 +486,15 @@ func Check(ctx context.Context, config Config, current string) (*Release, error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	resp, err := get(ctx, config.URL)
+	address := config.URL
+	if config.Provider == "gitcode" {
+		var err error
+		address, err = gitcodeManifestURL(ctx, config)
+		if err != nil {
+			return nil, err
+		}
+	}
+	resp, err := get(ctx, address, config.Transport)
 	if err != nil {
 		return nil, err
 	}
@@ -474,6 +550,21 @@ func verifyArtifact(path string, asset Asset) error {
 
 // Stage writes beside the installed executable, so publication uses same-volume
 // renames. A failed download leaves the current executable untouched.
+type progressReader struct {
+	r           io.Reader
+	done, total int64
+	report      func(int64, int64)
+}
+
+func (r *progressReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	r.done += int64(n)
+	if n > 0 && r.report != nil {
+		r.report(r.done, r.total)
+	}
+	return n, err
+}
+
 func Stage(ctx context.Context, config Config, release *Release, current, target string) (*Pending, error) {
 	if release == nil {
 		return nil, i18n.NewError("没有可安装的更新")
@@ -511,7 +602,7 @@ func Stage(ctx context.Context, config Config, release *Release, current, target
 			pending.Cleanup()
 		}
 	}()
-	resp, err := get(ctx, verified.Asset.URL)
+	resp, err := get(ctx, verified.Asset.URL, config.Transport)
 	if err != nil {
 		return nil, err
 	}
@@ -520,7 +611,7 @@ func Stage(ctx context.Context, config Config, release *Release, current, target
 	if err != nil {
 		return nil, err
 	}
-	n, err := io.Copy(f, io.LimitReader(resp.Body, verified.Asset.Size+1))
+	n, err := io.Copy(f, &progressReader{r: io.LimitReader(resp.Body, verified.Asset.Size+1), total: verified.Asset.Size, report: config.Progress})
 	if err == nil {
 		err = f.Sync()
 	}

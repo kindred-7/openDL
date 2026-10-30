@@ -265,10 +265,11 @@
   const ruleOnlyResources = new Set();
   let badgeTimer;
   const notifyResourcesChanged = () => {
-    clearTimeout(badgeTimer);
+    if (badgeTimer) return;
     badgeTimer = setTimeout(() => {
+      badgeTimer = null;
       try { chrome.runtime.sendMessage({ type: "resourcesChanged" }, () => { void chrome.runtime.lastError; }); } catch {}
-    }, 500);
+    }, 80);
   };
   // Several passes can see one address; the strongest classification wins.
   const MEDIA_KIND = new Set(["video", "audio", "source", "embed", "object", "network:media", "network:video"]);
@@ -445,7 +446,7 @@
       }
       pendingRoots.clear();
       scanAll = false;
-    }, 200);
+    }, 80);
   };
 
   new MutationObserver((muts) => {
@@ -601,6 +602,10 @@
   // popup/background queries. "download" only confirms the URL is on this
   // page; the actual transfer goes through the service worker to the host.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+    if (msg.type === "cachedResources") {
+      sendResponse({ resources: [...resources.values()], href: location.href, title: document.title });
+      return false;
+    }
     if (msg.type === "getResources") {
       refreshSiteRules(false).then(() => {
         fullScan();

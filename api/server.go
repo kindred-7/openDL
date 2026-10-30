@@ -34,14 +34,15 @@ const DefaultPort = 37913
 
 // Server serves the download manager over loopback HTTP.
 type Server struct {
-	Mgr       *download.Manager
-	Token     string
-	Prompt    func(download.Request) bool
-	OpenTask  func(string, bool) error
-	promptMu  sync.Mutex
-	promptIDs map[string][32]byte
-	ln        net.Listener
-	theme     atomic.Pointer[Theme]
+	Mgr         *download.Manager
+	Token       string
+	Prompt      func(download.Request) bool
+	OpenTask    func(string, bool) error
+	InstallExit func(string) bool
+	promptMu    sync.Mutex
+	promptIDs   map[string][32]byte
+	ln          net.Listener
+	theme       atomic.Pointer[Theme]
 }
 
 // Theme contains only public presentation tokens for the browser extension.
@@ -158,6 +159,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case r.Method == http.MethodPost && r.URL.Path == "/api/installer-exit":
+		var request struct {
+			Executable string `json:"executable"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&request); err != nil || s.InstallExit == nil || !s.InstallExit(request.Executable) {
+			http.Error(w, "installer exit unavailable", http.StatusConflict)
+			return
+		}
+		writeJSON(w, map[string]bool{"ok": true})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ping":
 		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2"}})
 	case r.Method == http.MethodPost && (r.URL.Path == "/api/download" || r.URL.Path == "/api/prompt"):

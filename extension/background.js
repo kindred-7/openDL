@@ -178,21 +178,31 @@ const observedPlaylists = new Map();
 let playlistChanges = Promise.resolve();
 const playlistStorageKey = (tabId) => `opendl-playlists:${tabId}`;
 const badgeTimers = new Map();
+const badgeRevisions = new Map();
+const notifyPopupResources = (tabId) => {
+  try { chrome.runtime.sendMessage({ type: "opendlResourcesUpdated", tabId }, () => { void chrome.runtime.lastError; }); } catch {}
+};
 function scheduleBadge(tabId) {
-  clearTimeout(badgeTimers.get(tabId));
+  badgeRevisions.set(tabId, (badgeRevisions.get(tabId) || 0) + 1);
+  if (badgeTimers.has(tabId)) return;
   badgeTimers.set(tabId, setTimeout(async () => {
     badgeTimers.delete(tabId);
+    const revision = badgeRevisions.get(tabId);
     try {
       const frames = await chrome.webNavigation.getAllFrames({ tabId });
-      const replies = await Promise.allSettled((frames || []).map((frame) => chrome.tabs.sendMessage(tabId, { type: "getResources" }, { frameId: frame.frameId })));
+      const replies = await Promise.allSettled((frames || []).map((frame) => Promise.race([
+        chrome.tabs.sendMessage(tabId, { type: "cachedResources" }, { frameId: frame.frameId }),
+        new Promise((resolve) => setTimeout(() => resolve(null), 500))
+      ])));
       const urls = new Set((await playlistsFor(tabId)).keys());
       for (const reply of replies) if (reply.status === "fulfilled") {
         for (const item of reply.value?.resources || []) if (item?.url) urls.add(item.url);
       }
+      if (revision !== badgeRevisions.get(tabId)) return;
       await chrome.action.setBadgeText({ tabId, text: urls.size ? (urls.size > 99 ? "99+" : String(urls.size)) : "" });
       await chrome.action.setBadgeBackgroundColor({ tabId, color: "#3e63dd" });
     } catch {}
-  }, 500));
+  }, 80));
 }
 function enqueuePlaylistChange(action) {
   const result = playlistChanges.then(action);
@@ -316,7 +326,6 @@ async function captureNotice(message) {
   try { await chrome.notifications.create({ type: "basic", iconUrl: "icon.png", title: "OpenDL", message }); } catch {}
 }
 async function promptInlineDocument(details, mime, background = false) {
-  let reserved = false;
   try {
     const stored = await chrome.storage.local.get({ "opendl-takeover": true, "opendl-inline-formats": globalThis.openDLResourceTypes.defaultInlineFormats });
     if (stored["opendl-takeover"] === false) return;
@@ -324,34 +333,31 @@ async function promptInlineDocument(details, mime, background = false) {
     const candidate = documentCandidate(details, mime, formats, background);
     if (!candidate) return;
     if (background) {
-      reserved = await reserveDocument(details.tabId, details.url);
-      if (!reserved) return;
+      // Background requests can be ordinary page data. Offer them in the
+      // resource list without starting a desktop prompt or reading cookies.
+      const pageUrl = (details.documentUrl || details.initiator || "").slice(0, 4096);
+      await enqueuePlaylistChange(async () => {
+        const entries = await playlistsFor(details.tabId);
+        if (entries.has(details.url)) return;
+        entries.set(details.url, { url: details.url, ext: candidate.ext, kind: "network:document", pageUrl, frameId: details.frameId, downloadAttr: candidate.filename });
+        if (entries.size > 100) entries.delete(entries.keys().next().value);
+        scheduleBadge(details.tabId);
+        notifyPopupResources(details.tabId);
+        await savePlaylists(details.tabId, entries);
+      });
+      return;
     }
     const pageUrl = (details.documentUrl || details.initiator || "").slice(0, 4096);
-    // Keep the candidate available for a manual retry when cookie retrieval
-    // or the desktop handoff fails. The existing navigation cleanup applies.
-    if (background) await enqueuePlaylistChange(async () => {
-      const entries = await playlistsFor(details.tabId);
-      entries.delete(details.url);
-      entries.set(details.url, { url: details.url, ext: candidate.ext, kind: "network:document", pageUrl, frameId: details.frameId, downloadAttr: candidate.filename });
-      if (entries.size > 100) entries.delete(entries.keys().next().value);
-      await savePlaylists(details.tabId, entries);
-      scheduleBadge(details.tabId);
-    });
     let cookie;
     try { cookie = await cookiesForTab(details.tabId, details.url); }
     catch {
-      if (reserved) await forgetDocument(details.tabId, details.url);
       await captureNotice(localize("无法获取浏览器登录状态，请从扩展资源列表重试"));
       return;
     }
     const reply = await sendToDesktop({ type: "prompt", url: details.url, pageUrl, title: "", filename: candidate.filename, mediaMode: "", mediaQuality: "", queue: "", cookie },
       { tabId: details.tabId, url: details.url, pageUrl, queue: "", useBrowserCookies: false });
-    if (reserved && reply && !reply.ok && !reply.deliveryUnknown) await forgetDocument(details.tabId, details.url);
     if (!reply?.ok) await captureNotice(reply?.deliveryUnknown ? localize("无法确认桌面端是否收到任务，请先检查桌面任务列表") : ((reply && reply.reason) || localize("桌面端或原生主机不可用")));
-  } catch {
-    if (reserved) try { await forgetDocument(details.tabId, details.url); } catch {}
-  }
+  } catch {}
 }
 
 chrome.webRequest.onHeadersReceived.addListener((details) => {
@@ -387,13 +393,15 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
     entries.delete(details.url);
     entries.set(details.url, { url: details.url, ext: ext || "", kind: playlistExt ? "network:playlist" : ext ? "network:media" : "network:attachment", pageUrl, frameId: details.frameId });
     if (entries.size > 100) entries.delete(entries.keys().next().value);
-    await savePlaylists(details.tabId, entries);
     scheduleBadge(details.tabId);
+    notifyPopupResources(details.tabId);
+    await savePlaylists(details.tabId, entries);
   });
 }, { urls: ["http://*/*", "https://*/*"] }, ["responseHeaders"]);
 
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId === 0) {
+    badgeRevisions.set(details.tabId, (badgeRevisions.get(details.tabId) || 0) + 1);
     clearTimeout(badgeTimers.get(details.tabId));
     badgeTimers.delete(details.tabId);
     void chrome.action.setBadgeText({ tabId: details.tabId, text: "" }).catch(() => {});
@@ -416,6 +424,7 @@ chrome.webNavigation.onCommitted.addListener((details) => {
   });
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  badgeRevisions.delete(tabId);
   clearTimeout(badgeTimers.get(tabId));
   badgeTimers.delete(tabId);
   void clearSubmissions(tabId).catch(() => {});

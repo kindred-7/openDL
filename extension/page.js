@@ -19,7 +19,7 @@
   const PAGE_SOURCE = "opendl-page";
   const CS_SOURCE = "opendl-cs";
   const MAX_ITEMS = 256;
-  const FLUSH_MS = 250;
+  const FLUSH_MS = 60;
   const HINT = /m3u8?|mpd|manifest|playlist|\.m3u\b/i;
   const PLAIN = new Set(["", "text/plain", "application/octet-stream"]);
 

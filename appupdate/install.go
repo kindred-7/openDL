@@ -88,7 +88,6 @@ func (p *Pending) Start() error {
 	return nil
 }
 
-
 // LaunchInstaller 启动已校验的安装器升级包；替换与回退由安装器完成。
 func LaunchInstaller(path string) error { return runInstaller(path) }
 
@@ -126,7 +125,7 @@ func DownloadInstaller(ctx context.Context, config Config, release *Release, cur
 		}
 	}
 	path := filepath.Join(directory, "opendl-installer"+suffix)
-	resp, err := get(ctx, verified.Asset.URL)
+	resp, err := get(ctx, verified.Asset.URL, config.Transport)
 	if err != nil {
 		return "", err
 	}
@@ -135,7 +134,7 @@ func DownloadInstaller(ctx context.Context, config Config, release *Release, cur
 	if err != nil {
 		return "", err
 	}
-	n, err := io.Copy(f, io.LimitReader(resp.Body, verified.Asset.Size+1))
+	n, err := io.Copy(f, &progressReader{r: io.LimitReader(resp.Body, verified.Asset.Size+1), total: verified.Asset.Size, report: config.Progress})
 	if err == nil {
 		err = f.Sync()
 	}
@@ -153,6 +152,32 @@ func DownloadInstaller(ctx context.Context, config Config, release *Release, cur
 		return "", err
 	}
 	return path, nil
+}
+
+// VerifyInstaller revalidates the signed release and staged file before launch.
+func VerifyInstaller(config Config, release *Release, current, path string) error {
+	if release == nil {
+		return i18n.NewError("没有可安装的更新")
+	}
+	verified, err := Decode(config, release.Envelope, time.Now())
+	if err != nil {
+		return err
+	}
+	kind, err := AssetKind(verified.Asset)
+	if err != nil {
+		return err
+	}
+	if kind != "installer" {
+		return i18n.NewError("当前更新不是安装器升级包")
+	}
+	newer, err := Newer(verified.Manifest.Version, current)
+	if err != nil {
+		return err
+	}
+	if !newer {
+		return i18n.NewError("拒绝安装旧版本或相同版本")
+	}
+	return verifyArtifact(path, verified.Asset)
 }
 
 func loadPending(path string) (*Pending, error) {

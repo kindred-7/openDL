@@ -75,7 +75,7 @@ type appPreferences struct {
 }
 
 func defaultAppPreferences() appPreferences {
-	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, NotifyComplete: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault}
+	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, NotifyComplete: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
 }
 
 var connectionOptions = [...]int{-1, 1, 4, 8, 16, 32}

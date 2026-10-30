@@ -92,6 +92,18 @@ let currentResources = [];
 let displayedTabId = null;
 let pageStale = false;
 let batchBusy = false, singleBusy = 0, scanBusy = false, renderVersion = 0;
+let refreshPending = false, refreshTimer = null;
+
+function scheduleResourceRefresh() {
+  refreshPending = true;
+  if (refreshTimer !== null) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    if (!refreshPending || scanBusy || batchBusy || singleBusy > 0 || listEl.contains(document.activeElement)) return;
+    refreshPending = false;
+    void render();
+  }, 150);
+}
 
 function updateControls() {
   const blocked = scanBusy || batchBusy || singleBusy > 0 || !loginSettingReady;
@@ -106,6 +118,7 @@ function updateControls() {
     if (button.dataset.copy === "true") continue;
     button.disabled = pageStale || scanBusy || !loginSettingReady || batchBusy || sendingURLs.has(button.parentElement.dataset.url) || uncertainURLs.has(button.dataset.key) || button.dataset.sending === "true";
   }
+  if (refreshPending && !scanBusy && !batchBusy && singleBusy === 0) scheduleResourceRefresh();
 }
 
 // The takeover setting drives the background's download interception and
@@ -295,7 +308,7 @@ async function withTimeout(promise, milliseconds) {
   }
 }
 
-async function sniff(forceRules = false) {
+async function sniff(forceRules = false, onProgress = null) {
   let tab;
   try {
     tab = await activeTab();
@@ -317,12 +330,14 @@ async function sniff(forceRules = false) {
     frames = [{ frameId: 0, url: tab.url || "" }];
     limitedFrames = true;
   }
-  const results = await Promise.allSettled(frames.map(async (frame) =>
-    withTimeout(chrome.tabs.sendMessage(tab.id, { type: forceRules ? "rescan" : "getResources" }, { frameId: frame.frameId }), 7000)
-  ));
   const resources = new Map();
   let responded = 0, inaccessible = 0, timedOut = 0, rulesStale = false;
-  results.forEach((result, index) => {
+  const report = () => {
+    if (onProgress && (navigationRevisions.get(tab.id) || 0) === navigationRevision) {
+      onProgress({ resources: [...resources.values()], tabId: tab.id });
+    }
+  };
+  const handleFrame = (result, index) => {
     if (result.status !== "fulfilled" || !Array.isArray(result.value?.resources)) {
       if (/^https?:/i.test(frames[index].url || "")) inaccessible++;
       if (result.status === "rejected" && result.reason?.message === "timeout") timedOut++;
@@ -349,8 +364,29 @@ async function sniff(forceRules = false) {
         });
       }
     }
+    report();
+  };
+  const frameJobs = frames.map(async (frame, index) => {
+    try {
+      const value = await withTimeout(chrome.tabs.sendMessage(tab.id, { type: forceRules ? "rescan" : "getResources" }, { frameId: frame.frameId }), 7000);
+      handleFrame({ status: "fulfilled", value }, index);
+    } catch (reason) {
+      handleFrame({ status: "rejected", reason }, index);
+    }
   });
-  try {
+  const cachedJobs = forceRules ? [] : frames.map(async (frame, index) => {
+    try {
+      const value = await withTimeout(chrome.tabs.sendMessage(tab.id, { type: "cachedResources" }, { frameId: frame.frameId }), 500);
+      if (Array.isArray(value?.resources)) {
+        // Cached responses only contribute early display; they do not count
+        // as completed scans or affect final frame diagnostics.
+        const before = responded;
+        handleFrame({ status: "fulfilled", value }, index);
+        responded = before;
+      }
+    } catch {}
+  });
+  const observedJob = (async () => { try {
     const observed = await withTimeout(chrome.runtime.sendMessage({ type: "observedPlaylists", tabId: tab.id }), 5000);
     for (const item of observed?.resources || []) {
       if (!item || !/^https?:/i.test(item.url || "")) continue;
@@ -365,9 +401,11 @@ async function sniff(forceRules = false) {
         resources.set(item.url, { ...item, pageUrl: item.pageUrl || frame?.url || tab.url || "", title: tab.title || "", tabId: tab.id });
       }
     }
+    report();
   } catch {
     // Frame scanning remains usable if the background cache is unavailable.
-  }
+  } })();
+  await Promise.all([...frameJobs, ...cachedJobs, observedJob]);
   try {
     const current = await activeTab();
     if (!current || current.id !== tab.id || current.url !== tab.url || (navigationRevisions.get(tab.id) || 0) !== navigationRevision) {
@@ -538,7 +576,21 @@ async function render(forceRules = false) {
   const version = ++renderVersion;
   let result;
   try {
-    result = await sniff(forceRules);
+    result = await sniff(forceRules, ({ resources, tabId }) => {
+      if (version !== renderVersion || pageStale || batchBusy || !resources.length) return;
+      const documentKey = `${tabId}:${documentRevisions.get(tabId) || 0}`;
+      if (displayedDocument && displayedDocument !== documentKey) {
+        selected.clear();
+        sentURLs.clear();
+        uncertainURLs.clear();
+      }
+      displayedDocument = documentKey;
+      displayedTabId = tabId;
+      currentResources = resources;
+      emptyEl.classList.add("hidden");
+      listEl.replaceChildren(...resources.map(row));
+      updateControls();
+    });
   } catch {
     result = { resources: [], error: localize("无法读取当前标签页") };
   } finally {
@@ -674,5 +726,14 @@ panelSettings.addEventListener("keydown", (event) => {
   settingsButton.focus();
 });
 document.getElementById("rescan-footer").addEventListener("click", () => render(true));
+
+chrome.runtime.onMessage.addListener((message, sender) => {
+  const tabId = message?.type === "resourcesChanged" ? sender?.tab?.id :
+    message?.type === "opendlResourcesUpdated" ? message.tabId : null;
+  if (Number.isInteger(tabId) && tabId === displayedTabId && !pageStale) scheduleResourceRefresh();
+});
+listEl.addEventListener("focusout", () => {
+  if (refreshPending) scheduleResourceRefresh();
+});
 
 render();

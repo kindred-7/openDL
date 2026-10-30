@@ -674,6 +674,15 @@ func (m *Manager) SetProxyConfig(value ProxyConfig) error {
 	return m.proxy.set(value)
 }
 
+// UpdateTransport shares only the configured proxy route with update requests;
+// it does not add task credentials, cookies, or site authentication.
+func (m *Manager) UpdateTransport() http.RoundTripper {
+	if m == nil || m.proxy == nil {
+		return nil
+	}
+	return m.proxy
+}
+
 // DoResourceRequest lets page-link extraction share the configured route and
 // connection limits, while the caller supplies its own deadline and body limit.
 // The loopback API and native messaging do not use this transport.

@@ -845,6 +845,7 @@ func main() {
 
 	promptQueue := make(chan download.Request, 64)
 	promptSlots := make(chan struct{}, 64)
+	installExit := make(chan struct{}, 1)
 	srv := &api.Server{Mgr: mgr, Prompt: func(req download.Request) bool {
 		select {
 		case promptSlots <- struct{}{}:
@@ -859,6 +860,17 @@ func main() {
 			return false
 		}
 	}}
+	srv.InstallExit = func(target string) bool {
+		current, err := os.Executable()
+		if err != nil || !filepath.IsAbs(target) || !strings.EqualFold(filepath.Clean(target), filepath.Clean(current)) {
+			return false
+		}
+		select {
+		case installExit <- struct{}{}:
+		default:
+		}
+		return true
+	}
 	srv.OpenTask = func(id string, folder bool) error {
 		for _, snap := range mgr.Snapshots() {
 			if snap.ID != id || !snap.BrowserOrigin || snap.State != download.Done || snap.FilePath == "" {
@@ -941,6 +953,41 @@ func main() {
 		}
 		// 窗口事件与后台工作在窗口创建后立即绑定，不等首次视图构建。
 		pg.startWindow()
+		go func() {
+			for {
+				select {
+				case <-installExit:
+					pg.mgr.PauseAll()
+					deadline := time.NewTimer(25 * time.Second)
+					ticker := time.NewTicker(250 * time.Millisecond)
+					for {
+						if pg.mgr.PrepareForUpdate() {
+							deadline.Stop()
+							ticker.Stop()
+							pg.win.Update(func() {
+								pg.quitting = true
+								pg.saveAppPreferences()
+								mygo.App.Quit()
+							})
+							return
+						}
+						select {
+						case <-ticker.C:
+						case <-deadline.C:
+							ticker.Stop()
+							goto retryInstallExit
+						case <-pg.stop:
+							deadline.Stop()
+							ticker.Stop()
+							return
+						}
+					}
+				case <-pg.stop:
+					return
+				}
+			retryInstallExit:
+			}
+		}()
 		pg.browserPromptSlot = func() { <-promptSlots }
 		go func() {
 			for {

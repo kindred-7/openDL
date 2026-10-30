@@ -590,6 +590,10 @@ func (pg *mainPage) view(c *ui.Context) {
 	if pg.showDelete {
 		pg.deleteDialog(c, p)
 	}
+	if pg.updater.showDialog {
+		c.Key("update-dialog")
+		pg.updateDialog(c, p)
+	}
 }
 
 // ── 标题栏（38px，原生窗口按钮在右端） ──────────────────────────────────
@@ -610,6 +614,7 @@ func (pg *mainPage) titleBar(c *ui.Context, p *d1Palette) {
 			ui.Span{Text: "Open", Weight: style.WeightBrand, Color: p.brand},
 			ui.Span{Text: "DL", Weight: style.WeightBrandStrong, Color: p.fg},
 		).FontSize(style.TextBrand).Label(appBrand).SingleLine()
+		pg.updateBadge(c, p)
 		searchFocused := false
 		searchBox := ui.Row(c).Width(360).Height(26).Padding(0, 10).Gap(8).AlignItems(ui.Center).
 			Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).Margin(0, ui.Auto)
