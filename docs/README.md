@@ -1,6 +1,6 @@
 # 文档索引
 
-- [功能对照](idm-feature-parity.md)：与 IDM 的逐项对照表（现状、剩余、源码入口），结论以该表为准。
+- [功能对照](feature-overview.md)：与 参考下载器 的逐项对照表（现状、剩余、源码入口），结论以该表为准。
 - [下载功能差距](download-gap-analysis.md)：下载引擎的实现边界与语义细节。
 - [剩余功能推进记录](remaining-gaps-progress.md)：各能力的实现边界、格式/协议细节与格式化口径。
 - [手动验证清单](manual-verification.md)：全部实机验证项与预期，结果回填对照表。
@@ -14,8 +14,8 @@
 
 - [架构](architecture.md)：浏览器嗅探到桌面下载的整体结构。
 - [国际化](i18n.md)：词条组织与切换机制。
-- [多线程下载解构](multithread-download.md)、[路径识别分析](idm-path-recognize-analysis.md)：IDM 对应机制的分析，是引擎与 pathrec 的设计依据。
-- [复刻规划](idm-replica-roadmap.md)：早期规划，**已由功能对照表取代**，仅作决策留档。
+- [多线程下载解构](multithread-download.md)、[路径识别分析](path-recognition-analysis.md)：参考下载器 对应机制的分析，是引擎与 pathrec 的设计依据。
+- [复刻规划](development-roadmap.md)：早期规划，**已由功能对照表取代**，仅作决策留档。
 - [设计稿还原](design-implementation.md)、[设计规则](design-rules.md)、[浅色方案](design-3-notes.md)、[界面评估](ui-review.md)、[界面优化](ui-optimization.md)：界面过程记录。
 
 所有文档描述源码现状，不含构建、测试或运行结论；实机确认一律按清单执行；结论冲突时以功能对照表为准。

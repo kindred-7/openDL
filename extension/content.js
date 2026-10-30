@@ -1,6 +1,6 @@
 // opendl content script: page resource sniffing.
 //
-// The URL tokenizer is the permissive one reconstructed from IDM's content
+// The URL tokenizer is the permissive one reconstructed from 参考下载器's content
 // script (pathrec/extract.go documents it): paths with spaces, semicolons,
 // tildes and non-ASCII text stay intact, which strict RFC parsers drop.
 
@@ -159,7 +159,7 @@
   // ---- site rules ----------------------------------------------------------
   // Site rules recognize download paths that carry no file extension. They
   // come from the desktop's rules file through the background and follow the
-  // expansion IDM's content script uses: a "^/" pattern matches both the bare
+  // expansion 参考下载器's content script uses: a "^/" pattern matches both the bare
   // path and the full address.
   let siteRulesCompiled = [];
   let siteRulesAt = 0;

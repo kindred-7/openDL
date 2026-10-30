@@ -1,10 +1,10 @@
 # OpenDL 架构：浏览器嗅探 → 桌面下载
 
-复刻 IDM 的"扩展嗅探 + 原生消息 + 桌面下载"三件套：
+复刻 参考下载器 的"扩展嗅探 + 原生消息 + 桌面下载"三件套：
 
     浏览器页面                       桌面
     ┌─────────────┐  runtime 消息  ┌──────────────┐  stdio 帧协议  ┌──────────┐  loopback HTTP  ┌──────────────┐
-    │ content.js   │ ────────────► │ background.js │ ─────────────► │ idmhost  │ ──────────────► │ OpenDL 窗口  │
+    │ content.js   │ ────────────► │ background.js │ ─────────────► │ 原生消息主机  │ ──────────────► │ OpenDL 窗口  │
     │ 资源嗅探      │ ◄──────────── │ service worker│ ◄───────────── │ (exe)    │ ◄────────────── │ download.    │
     └─────────────┘   popup 列表   └──────────────┘   JSON 应答     └──────────┘   token 鉴权     │ Manager      │
            ▲                             │                                                            └──────────────┘
@@ -14,22 +14,22 @@
     │ popup.html  │  列出嗅探结果 + 逐条/批量下载
     └─────────────┘
 
-## 与 IDM 组件的对应
+## 与 参考下载器 组件的对应
 
-| IDM | OpenDL | 说明 |
+| 参考下载器 | OpenDL | 说明 |
 | --- | --- | --- |
 | content.js（DOM/媒体嗅探） | extension/content.js | 同样的宽容 URL 正则（pathrec/extract.go 有 Go 版），加 performance 资源表扫描 |
 | background.js（规则/转发） | extension/background.js | MV3 service worker，原生端口保活、断线重连、浏览器下载兜底 |
 | （同上，Firefox） | extension/background-firefox.js | Firefox 把背景脚本按模块加载，importScripts 不可用；该入口先按序加载 resources.js、i18n.js 再进入 background.js |
-| idmcchandler2_64.dll | cmd/idmhost | 4 字节小端长度 + JSON 的原生消息主机，转发到桌面 API |
-| IDMan.exe（下载引擎） | download.Manager + api.Server | 队列、多连接 Range 分片、断点文件、取消、命名 |
+| 原始程序 | nativehost/host.go | 4 字节小端长度 + JSON 的原生消息主机，转发到桌面 API |
+| 原始程序（下载引擎） | download.Manager + api.Server | 队列、多连接 Range 分片、断点文件、取消、命名 |
 | 特殊路径掩码/站点规则 | pathrec（mask/rule） | 命名与识别沿用上一轮重构 |
 
 ## 资源嗅探来源（content.js）
 
 1. DOM: video/audio/source/embed/object/iframe、a[href]（按扩展名过滤）、srcset。
 2. Network: 在可用时通过 PerformanceObserver 监听后续资源，并用 performance.getEntriesByType("resource") 扫描已有记录；筛选 initiatorType=media/video 或可下载扩展名。扩展不会清空或调整页面的性能记录缓冲区，未进入性能记录和不符合筛选条件的请求仍可能遗漏。
-3. 文本: 页面 HTML/脚本里的 URL 用 IDM 宽容正则抽（空格、;、~、unicode 路径都保留），
+3. 文本: 页面 HTML/脚本里的 URL 用 参考下载器 宽容正则抽（空格、;、~、unicode 路径都保留），
    只留可下载扩展名。
 4. 动态: MutationObserver 合并短时间内的新增节点和资源属性变化，批量扫描；打开弹窗时仍会重新扫描当前文档。动态页面中短暂出现并立即消失的资源不保证全部捕获。
 
@@ -43,7 +43,7 @@ M3U8 可选择下载清单，或尝试下载未加密、无不连续段的 TS / 
 
 插件弹窗中的下载使用 `prompt` 请求：桌面端按顺序显示预填的添加下载窗口，用户确认后才创建任务；取消不会下载。桌面端不可用时，此入口不会回退为浏览器直接下载。浏览器下载接管仍沿用原有下载协议。
 
-原生消息（扩展 ↔ idmhost，4 字节 LE 长度 + JSON）：
+原生消息（扩展 ↔ 原生消息主机，4 字节 LE 长度 + JSON）：
 
 | 方向 | 消息 | 字段 |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ M3U8 可选择下载清单，或尝试下载未加密、无不连续段的 TS / 
 
 扩展设置提供默认关闭的“使用浏览器登录状态”选项，启用时由浏览器请求可选 Cookie 权限，适用于资源列表中单个和批量发送的任务；浏览器下载接管不使用该选项。该选项仅提取当前标签页所属存储区中、与顶层页面和资源地址同源的非分区 Cookie；跨源资源、分区 Cookie 和需要其他认证方式的站点尚不支持自动传递。Cookie 仅用于当前桌面任务，任务记录不保存该请求头；跨源重定向时引擎移除敏感头，重启后需要重新提供凭据。浏览器自身回退下载仍使用浏览器的 Cookie 策略。设置与授权流程需手动验证。
 
-Loopback API（idmhost/任意本地工具 ↔ 桌面，127.0.0.1:37913，请求头 X-OpenDL-Token）：
+Loopback API（原生消息主机/任意本地工具 ↔ 桌面，127.0.0.1:37913，请求头 X-OpenDL-Token）：
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -74,7 +74,7 @@ Loopback API（idmhost/任意本地工具 ↔ 桌面，127.0.0.1:37913，请求�
 | POST | /api/cancel | body: {id} |
 
 桌面端先占用本地端口，再生成并写入 %AppData%/opendl/api-token（0600）；
-生成失败时不启动接口。idmhost 每次请求读取当前令牌；未携带或错误返回 401，
+生成失败时不启动接口。原生消息主机 每次请求读取当前令牌；未携带或错误返回 401，
 第二个实例无法因端口冲突覆盖正在运行实例的令牌。跨来源或降级重定向不转发认证及自定义敏感请求头。
 
 ## 安装步骤（Windows）
@@ -99,7 +99,7 @@ Chromium 的正式商店发布必须使用与清单公钥对应的发布身份�
 
 - go tool mygo vet . 通过；CGO_ENABLED=0 go test ./... 通过
   （pathrec / download / api / 主界面 UI 测试）。
-- idmhost 帧协议冒烟: 发送 {"type":"ping"} 帧 → {"app":"opendl-host","ok":true,...}。
+- 原生消息主机 帧协议冒烟: 发送 {"type":"ping"} 帧 → {"app":"opendl-host","ok":true,...}。
 
 ## 后续路线
 
@@ -107,4 +107,4 @@ Chromium 的正式商店发布必须使用与清单公钥对应的发布身份�
 - 网络层细嗅探：declarativeNetRequest 观察或 CDP 会话抓请求头（Range/Referer 随任务透传，
   download.Request.Headers 已留字段）。
 - 站点规则表（pathrec.SiteRule）随桌面端下发到扩展，覆盖无扩展名下载路径。
-- 下载前弹确认（对应 IDM 的"开始下载"对话框）与站点登录凭据表。
+- 下载前弹确认（对应 参考下载器 的"开始下载"对话框）与站点登录凭据表。

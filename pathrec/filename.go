@@ -12,7 +12,7 @@ import (
 	"golang.org/x/text/encoding/htmlindex"
 )
 
-// Source carries everything IDM considers when naming a download.
+// Source carries everything 参考下载器 considers when naming a download.
 type Source struct {
 	URL                string
 	ContentDisposition string
@@ -21,7 +21,7 @@ type Source struct {
 	SiteLabel          string // second-level domain label, used to clean titles
 }
 
-// DeriveFilename derives a Windows-safe filename like IDMan.exe does:
+// DeriveFilename derives a Windows-safe filename like 原始程序 does:
 // Content-Disposition first (RFC 5987 filename*, then RFC 2047 encoded
 // words), then the last URL path segment (percent-decoded, charset-aware),
 // then the cleaned page title, and finally a generated name from the MIME
@@ -30,7 +30,7 @@ func DeriveFilename(s Source) string {
 	ext := extFromMIME(s.ContentType)
 	finish := func(name string) string {
 		name = sanitizeWindows(name)
-		// IDM appends the extension from the response type when the name
+		// 参考下载器 appends the extension from the response type when the name
 		// derived from the path or title has none.
 		if ext != "" && !strings.Contains(name, ".") {
 			name = sanitizeWindows(name + ext)
@@ -61,7 +61,7 @@ func SanitizeFilename(name string) string { return sanitizeWindows(name) }
 // FromContentDisposition extracts the filename parameter of a
 // Content-Disposition header, decoding RFC 5987 filename* values and RFC 2047
 // encoded words. These are the "=?UTF-8?B?..?=" and "utf-8”..." forms the
-// IDMan.exe header parser carries in its string table.
+// 原始程序 header parser carries in its string table.
 func FromContentDisposition(cd string) string {
 	cd = strings.TrimSpace(cd)
 	if cd == "" {
@@ -137,7 +137,7 @@ func unquote(v string) string {
 }
 
 // decodeRFC5987 decodes charset'language'percent-encoded values, the
-// filename* form (RFC 5987) IDM supports charsets for: utf-8, windows-1252
+// filename* form (RFC 5987) 参考下载器 supports charsets for: utf-8, windows-1252
 // and ISO-8859-1 appear in its parser's string table.
 func decodeRFC5987(v string) string {
 	v = unquote(v)
@@ -172,7 +172,7 @@ func decodeEncodedWords(v string) string {
 }
 
 // FromURLPath takes the last path segment of a URL and percent-decodes it the
-// way IDMan.exe does: bytes are read as UTF-8 when valid, otherwise as
+// way 原始程序 does: bytes are read as UTF-8 when valid, otherwise as
 // windows-1252 / ISO-8859-1.
 func FromURLPath(rawURL string) string {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
@@ -190,7 +190,7 @@ func FromURLPath(rawURL string) string {
 }
 
 // stripSessionParams drops ";jsessionid=.." style suffixes, keeping other
-// semicolons: Windows filenames may contain them and IDM keeps them.
+// semicolons: Windows filenames may contain them and 参考下载器 keeps them.
 func stripSessionParams(seg string) string {
 	for _, key := range []string{";jsessionid=", ";sid=", ";phpsessid="} {
 		if i := strings.Index(strings.ToLower(seg), key); i > 0 {

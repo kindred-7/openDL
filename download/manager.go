@@ -1,6 +1,6 @@
 // Package download is the download engine the desktop app runs on behalf of
-// the browser extension: queued tasks, multi-connection HTTP Range transfer
-// like IDM's split download, progress, resume and cancellation.
+// the browser extension: queued tasks, multi-connection HTTP Range transfer,
+// progress, resume and cancellation.
 package download
 
 import (

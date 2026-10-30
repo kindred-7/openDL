@@ -38,7 +38,7 @@ OpenPGP 签名的子包必须具备完整的长度封装；尚未实现其关键
 已发布文件的中断恢复在签名检查后重新读取摘要和文件身份，确认与恢复前一致后才恢复完成状态；检查结束后的文件变化仍需重新验证。
 手动重新验证前会先保存旧的通过状态失效，避免验证中断后恢复旧结果；保存失败时提示错误，不把本次结果标记为已保存。
 
-NTLM 使用 [Azure/go-ntlmssp](https://github.com/Azure/go-ntlmssp) 的 NTLMv2 实现，不把 NTLM 回退等同于 Kerberos。每次协商使用独立连接，避免已认证连接泄漏给其他任务；代价是分段请求需要再次协商，不能据此宣称已达到 IDM 的连接复用性能。
+NTLM 使用 [Azure/go-ntlmssp](https://github.com/Azure/go-ntlmssp) 的 NTLMv2 实现，不把 NTLM 回退等同于 Kerberos。每次协商使用独立连接，避免已认证连接泄漏给其他任务；代价是分段请求需要再次协商，不能据此宣称已达到 参考下载器 的连接复用性能。
 Linux/macOS 的 GSSAPI 会话源码通过 `gssapi` 构建标签和 cgo 启用；Linux 需要 MIT Kerberos GSSAPI 开发库，macOS 需要系统 GSS 框架。共享 HTTP 层传递 TLS 通道绑定应用数据，后端构造原生绑定。仅 Kerberos 策略获取 SPNEGO 凭据并在发出令牌前调用 `gss_set_neg_mechs` 限定为 Kerberos；NTLM 依赖系统安装的机制及凭据。独立 NTLM 挑战指定 NTLM 机制，且仅接受 `NTLMSSP` 原始令牌；非原始格式明确拒绝。实际协商机制及 Kerberos 双向认证在完成后检查。该路径尚未构建或实机验证，默认构建仍不启用。
 
 代理集成认证的 HTTP 路径使用独立 HTTP/1.1 连接；HTTP 和 CONNECT 路径都处理成功响应中的最终认证令牌并检查协商结果。CONNECT 的 407 支持有明确长度或分块正文，解码正文限制为 64 KiB；无法确定正文结束位置或协商期间关闭连接时明确失败。响应头限制为 64 KiB，隧道握手响应取消与超时。代理认证兼容性与连接隔离仍需实机确认。

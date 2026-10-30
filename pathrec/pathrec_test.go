@@ -6,7 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// The cases below are the "special paths" IDM recognizes and a strict
+// The cases below are the "special paths" 参考下载器 recognizes and a strict
 // RFC 3986 tokenizer (what a plain downloader such as fluxdown uses) drops.
 func TestExtractURLsSpecialPaths(t *testing.T) {
 	text := strings.Join([]string{
@@ -35,7 +35,7 @@ func TestExtractURLsSpecialPaths(t *testing.T) {
 }
 
 func TestExtractURLsStopsBeforeProse(t *testing.T) {
-	// IDM's lookahead stops a path at "word:" so prose does not become URL.
+	// 参考下载器's lookahead stops a path at "word:" so prose does not become URL.
 	got := ExtractURLs(`See https://example.com/a/b file: it works`)
 	if len(got) != 1 || got[0] != "https://example.com/a/b" {
 		t.Fatalf("got %q", got)

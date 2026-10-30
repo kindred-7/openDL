@@ -1,5 +1,5 @@
 // Command opendl-cli submits download orders to the running OpenDL desktop
-// app over its loopback API (the command-line counterpart of idman.exe).
+// app over its loopback API.
 package main
 
 import (

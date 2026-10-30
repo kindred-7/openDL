@@ -1,5 +1,8 @@
 /build/
 /.mygo/
-mygo_windows_*.syso
-
+/output/
+/_extracted/
+/AGENTS.md
 /ip-logo-candidates/generate.ps1
+/*.exe
+mygo_windows_*.syso

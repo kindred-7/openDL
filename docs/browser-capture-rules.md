@@ -1,12 +1,12 @@
-# IDM 浏览器请求捕获规则解构（文件预览请求到下载链接）
+# 参考下载器 浏览器请求捕获规则解构（文件预览请求到下载链接）
 
-样本：IDM 6.43.16.1 扩展包（安装器 entry117，已按 zip 完整解出：
-_extracted/ext2/entry117_u110094.bin__background.js 等）与 IDMan.exe 字符串。
-本文回答：IDM 用什么规则精确捕获浏览器发向服务端的文件预览请求并取出下载链接。
+样本：参考下载器 6.43.16.1 扩展包（安装器 entry117，已按 zip 完整解出：
+_extracted/ext2/entry117_u110094.bin__background.js 等）与 原始程序 字符串。
+本文回答：参考下载器 用什么规则精确捕获浏览器发向服务端的文件预览请求并取出下载链接。
 
 ## 0. 结论
 
-IDM 不依赖 URL 有没有扩展名。它是三层判定：
+参考下载器 不依赖 URL 有没有扩展名。它是三层判定：
 全量请求观察 - 请求头改写/标记 - 响应头判定 + 规则命中 + XHR 复测，
 最后把 URL + 完整请求头 + Cookie 整体交给原生下载。因此
 /preview?docId=123 这类无扩展名的预览请求也能精确命中，且下载时
@@ -50,7 +50,7 @@ content.js 另行覆盖 media 元素与页面脚本。
 
 两处关键改造：
 
-1. Accept 清洗：当 XHR 的 Accept 带 IDM 私有标记
+1. Accept 清洗：当 XHR 的 Accept 带 参考下载器 私有标记
    application/vnd.t1c.<kind>-<id>（Ua 正则解析出 kind/id，如 pxr/pfm），
    发往服务器前把该段从 Accept 剥离（保留前后缀），并把请求登记到规则 id
    名下（b.I=id）。预览请求因此与站点规则精确关联，服务器只看到正常 Accept。
@@ -61,7 +61,7 @@ content.js 另行覆盖 media 元素与页面脚本。
 
 按序短路：
 
-1. 状态码必须是 200 / 206 / 304；204 且状态行含 IDM 是原生信令特判。
+1. 状态码必须是 200 / 206 / 304；204 且状态行含 参考下载器 是原生信令特判。
 2. 读 Content-Type（去参数）与 Content-Disposition。
 3. 顶层导航且 text/html 且非 attachment - 记为页面，放行。
 4. 忽略掩码命中 - 放行。
@@ -79,14 +79,14 @@ content.js 另行覆盖 media 元素与页面脚本。
     M3U8/F4M/MPD 流、F4F Seg1-Frag 分片、ASF 广告过滤 Content-Length<=100KB
     或 Server: DCLK-AdSvr）。
 11. XHR 复测：可疑命中用 XMLHttpRequest 以 blob/text responseType 重新拉一遍
-    验证；本地代理链路回执响应头 x-idm-status（值为 3 表示确认）做终审。
+    验证；本地代理链路回执响应头 x-参考下载器-status（值为 3 表示确认）做终审。
 
 返回码：4=下载接管，2=媒体接管（视频面板），5=待定/等待 HTML 页，1=放行，6=仅观察。
 
 ## 5. 下载链接的交付（MSG#13 到原生）
 
-判定为接管后，Y() 构造 MSG#13 经 connectNative(com.tonec.idm) -
-IDMMsgHost.exe - IDMan.exe，载荷字段表（编号槽位）：
+判定为接管后，Y() 构造 MSG#13 经 connectNative(com.tonec.参考下载器) -
+原始程序 - 原始程序，载荷字段表（编号槽位）：
 
 - [6] URL（含查询串，即签名下载链接）、[12] 状态行、[4] 推断扩展、
   [100] 文件名、[2] 服务器 IP/主机、[11] 全部请求头、[13] 响应头、
@@ -95,13 +95,13 @@ IDMMsgHost.exe - IDMan.exe，载荷字段表（编号槽位）：
 - 标志位 q：IPv4/IPv6、页面来源、POST 等位标志
 - Cookie 补全：请求头缺 Cookie 时用 cookies API 按 URL 取（permissions 含
   cookies），保证带登录态下载
-- 原生终审：Options->File types 白名单（IDMan.exe 的 COptFileTypes 类），可按类型拒绝
+- 原生终审：Options->File types 白名单（原始程序 的 COptFileTypes 类），可按类型拒绝
 
 ## 6. 会话重放：绕过浏览器禁止头
 
 重放原请求（原 method/url/body）时，XHR 不允许设置 Host/Origin/Referer/
 Cookie/User-Agent/Connection/DNT/Accept-Encoding/Sec-*（ma 正则）。
-IDM 把这些头改名为 x-idm-<name> 发出，再在 onBeforeSendHeaders（blocking）
+参考下载器 把这些头改名为 x-参考下载器-<name> 发出，再在 onBeforeSendHeaders（blocking）
 里剥掉前缀还原为真实头并去重（含扩展自身 Origin 的还原）：
 服务器看到的请求与浏览器原始预览请求逐头一致。这也是短时效签名 URL
 能直接下载的原因。
@@ -114,15 +114,15 @@ IDM 把这些头改名为 x-idm-<name> 发出，再在 onBeforeSendHeaders（blo
    disposition/filename - URL 扩展比对 - 黑名单 - 站点规则 - 复测。
 3. Accept 清洗与规则 id 关联可用普通扩展头实现（需 host_permissions）。
 4. Cookie 补全用 chrome.cookies.get({url})（需 cookies 权限）。
-5. x-idm- 头还原技巧依赖 webRequestBlocking（MV2/Firefox 可用）。
+5. x-参考下载器- 头还原技巧依赖 webRequestBlocking（MV2/Firefox 可用）。
 6. 复测 XHR 与状态头回执的模式，可在桌面端代发请求的架构里用 loopback API
    返回判定代替（api.Server 已具备）。
 
 ## 证据索引
 
 - entry117 manifest（权限/内容脚本/原生主机）
-- background.js：zb（注册）、Cc/Ka（请求侧规则）、Cb（头改写+Accept 清洗+x-idm- 还原）、
-  Fb/nc（响应判定链）、Y（MSG#13 载荷）、sc（x-idm-status 复测）、Ua（vnd.t1c 解析）、
+- background.js：zb（注册）、Cc/Ka（请求侧规则）、Cb（头改写+Accept 清洗+x-参考下载器- 还原）、
+  Fb/nc（响应判定链）、Y（MSG#13 载荷）、sc（x-参考下载器-status 复测）、Ua（vnd.t1c 解析）、
   hb（MIME 表）、Qa/Pa（黑名单）、ma（禁止头正则）
-- IDMan.exe：COptFileTypes（文件类型白名单）、notaskfn2、
+- 原始程序：COptFileTypes（文件类型白名单）、notaskfn2、
   CCouldNotTakeOverOnHtml4Dlg（无法接管提示）

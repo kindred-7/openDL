@@ -572,7 +572,7 @@ func TestDownloadRangeRejectsInvalidResponses(t *testing.T) {
 }
 
 // Dynamic scheduling splits big chunks further, so the server sees more
-// range requests than there are connections (IDM's FindMaxFreeChunk).
+// range requests than there are connections (参考下载器's FindMaxFreeChunk).
 func TestDynamicChunkScheduling(t *testing.T) {
 	data := make([]byte, 9<<20)
 	_, _ = rand.Read(data)

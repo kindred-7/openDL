@@ -1,7 +1,5 @@
-// Command idmhost is the browser native messaging host (the counterpart of
-// IDM's idmcchandler2_64.dll): it reads length-prefixed JSON from the
-// extension on stdio and forwards each download order to the OpenDL desktop
-// app over the loopback API.
+// Package nativehost handles browser native messages, reading length-prefixed
+// JSON from standard input and forwarding requests to the desktop application.
 package nativehost
 
 import (

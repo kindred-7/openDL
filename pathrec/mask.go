@@ -10,17 +10,17 @@ import (
 //go:embed masks.txt
 var masksRaw string
 
-// MaskList recognizes "special paths": URL masks IDM handles outside the
+// MaskList recognizes "special paths": URL masks 参考下载器 handles outside the
 // normal interception flow (background resources, update files, ads and
 // other paths that must not become downloads). Patterns use "*" wildcards,
-// matching the table shipped with the IDM installer.
+// matching the table shipped with the 参考下载器 installer.
 type MaskList struct {
 	patterns []string
 	re       []*regexp.Regexp
 	once     sync.Once
 }
 
-// DefaultMasks returns the mask table extracted from the IDM 6.43 installer.
+// DefaultMasks returns the mask table extracted from the 参考下载器 6.43 installer.
 func DefaultMasks() *MaskList {
 	return &MaskList{patterns: parseLines(masksRaw)}
 }

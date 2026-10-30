@@ -1,5 +1,5 @@
-# URL masks extracted from idman643build16.exe installer entry 044
-# IDM treats matching URLs as special paths (background resources, updates,
+# URL masks extracted from 原始安装样本 installer entry 044
+# 参考下载器 treats matching URLs as special paths (background resources, updates,
 # ads and similar) that must not enter the normal download flow.
 http://*.skyrock.com/*.img
 http://*.skyrock.net/*.img
