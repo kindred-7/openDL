@@ -1,6 +1,7 @@
 /build/
 /.mygo/
 /output/
+/docs/
 /_extracted/
 /AGENTS.md
 /ip-logo-candidates/generate.ps1
