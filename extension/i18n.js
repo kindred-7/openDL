@@ -1,0 +1,164 @@
+// Source messages identify presentation text only. Browser locale selects the catalog.
+(() => {
+  const ids = {
+  "页面悬浮下载按钮": "m_hover_setting",
+  "无法保存悬浮按钮设置": "m_hover_save_failed",
+  "鼠标移到音视频资源链接时显示下载按钮。": "m_hover_setting_hint",
+  "无法读取桌面任务": "m_tasks_read_failed",
+  "原生主机版本不支持任务列表，请更新桌面应用": "m_tasks_host_unsupported",
+  "仅支持 HTTP 和 HTTPS 链接": "m_context_http_only",
+  "等待桌面确认": "m_wait_desktop_confirmation",
+  "再次下载": "m_download_again",
+  "下载全部": "m_download_all",
+  "暂无浏览器下载任务": "m_tasks_empty",
+  "显示最近的浏览器下载任务，最多 200 项": "m_tasks_recent",
+  "加载更多任务": "m_tasks_more",
+  "已显示 %s 个浏览器下载任务": "m_tasks_count",
+  "排队中": "m_task_queued",
+  "下载中": "m_task_running",
+  "已完成": "m_task_done",
+  "已暂停": "m_task_paused",
+  "失败": "m_task_failed",
+  "打开文件": "m_open_file",
+  "打开文件位置": "m_open_folder",
+  "无法打开文件或文件夹": "m_open_failed",
+  "未命名资源": "m_unnamed_resource",
+  "复制链接": "m_copy_link",
+  "链接已复制": "m_link_copied",
+  "无法复制链接": "m_copy_failed",
+  "资源": "m_tab_resources",
+  "；站点规则刷新失败，使用已有规则": "m_rules_refresh_failed",
+  "无法获取浏览器登录状态，请从扩展资源列表重试": "m_capture_cookie_failed",
+  "在线文档格式": "m_inline_formats",
+  "可识别常见文件类型、文件名及 /content/格式 路径，例如 pdf, zip, docx；自动捕获使用目标站点的非分区 Cookie。": "m_inline_mime_hint",
+  "接管开启时捕获匹配格式的在线文件；多个扩展名用逗号分隔，留空关闭。": "m_inline_formats_hint",
+  "重试读取文档设置": "m_inline_retry",
+  "重试保存文档设置": "m_inline_save_retry",
+  "无法读取在线文档格式": "m_inline_read_failed",
+  "请输入有效的文件扩展名": "m_inline_invalid",
+  "无法保存在线文档格式": "m_inline_save_failed",
+  "任务": "m_tab_tasks",
+  "文件": "m_file_kind",
+  "正在检测桌面端…": "m_desktop_connecting",
+  "已连接": "m_desktop_connected",
+  "未连接": "m_desktop_disconnected",
+  "当前页面暂未嗅探到资源": "m_no_resources",
+  "任务在桌面端查看与管理": "m_tasks_on_desktop",
+  "面板切换": "m_panel_switch",
+  "原生主机版本不支持媒体下载选项，请更新原生主机": "m_media_unsupported_host",
+  "桌面端版本不支持该下载请求，请更新桌面应用": "m_desktop_unsupported",
+  "应用正在准备更新，请稍后再操作": "m_update_in_progress",
+  "无法保存下载任务，请检查应用日志和存储空间": "m_journal_write_failed",
+  "桌面端认证失败，请重新启动扩展和桌面应用": "m_desktop_unauthorized",
+  "下载 HLS；独立音轨点播需要本机 FFmpeg，支持 AES-128，暂不支持独立音轨直播": "m_hls_audio_aes",
+  "音轨语言": "m_audio_language",
+  "留空自动选择；指定语言时优先精确匹配，其次匹配相同主语言": "m_audio_language_hint",
+  "例如 zh-CN、en": "m_audio_language_placeholder",
+  "下载 HLS；独立音轨点播需要本机 FFmpeg，暂不支持独立音轨加密或直播": "m_hls_audio_ffmpeg",
+  "下载未加密 DASH 点播；独立音视频轨合并需要本机 FFmpeg": "m_dash_ffmpeg",
+  "下载未加密的单轨 DASH 点播；独立音视频轨暂不支持混流": "m_dash_single_track",
+  "下载所选 (%s)": "m_993c060c27a19320",
+  "下载所选": "m_f583ba476b0fc0bb",
+  "未获得浏览器 Cookie 权限": "m_4e1e8ec23edb968e",
+  "无法获取浏览器 Cookie 权限": "m_a77848af0e3748bb",
+  "无法保存接管设置": "m_c16bda1c4719e9fd",
+  "待确认": "m_a8b0bd9c65f7fad5",
+  "请先检查桌面或浏览器下载列表，确认后可重新打开扩展操作": "m_fa82f035feee7522",
+  "无法读取当前标签页": "m_82dcd6486b88d83e",
+  "页面已发生变化，请重新扫描": "m_page_changed_rescan",
+  "没有活动标签页": "m_ab574192ec8293f3",
+  "页面框架响应超时，请稍后重新扫描": "m_7f7d397ea32802f7",
+  "选择 ": "m_beb4816bf802eb78",
+  "已发送": "m_60823aaec73bd5db",
+  "下载清单": "m_6a8d8d4cb1eb972f",
+  "下载": "m_4673a23061656125",
+  "浏览器下载": "m_4780f3bbfd19ded4",
+  "重试": "m_b8784c8dd5636ff2",
+  "无法确认任务是否已发送，请先检查下载列表": "m_6bd4444cf098ce68",
+  "无法确认任务是否已发送，请先检查下载列表：": "m_fe4cb848b3f716ec",
+  "下载视频": "m_eec15b2c1bab5fae",
+  "按画质选项的上限下载并合并；支持未加密、音视频合并的 TS 或分片 MP4 点播": "m_10b9d20fe5cb470d",
+  "识别到 ": "m_0efe7afb060cb440",
+  " 个资源": "m_4385285b1ae221ea",
+  "（%s 个页面框架无法读取或超时）": "m_8455a02316299ef7",
+  "（仅扫描主框架）": "m_f757a7095a5e339d",
+  "发送失败": "m_ac77953a1e064ed6",
+  "桌面 %s 项，浏览器 %s 项，失败 %s 项，待确认 %s 项": "m_cea87d0c314a30e8",
+  "，%s 项仅下载播放清单": "m_a9a9d230a3252d94",
+  "；请先检查下载列表": "m_f3aaaf4b8474e523",
+  "；部分页面框架未扫描": "m_e7bef9ebd279ca7e",
+  "没有可下载的资源": "m_677e14008532ece9",
+  "发送失败：": "m_e44775371d6b54f7",
+  "当前页面的发送记录已满，请关闭或重新加载页面后重试": "m_7acd4fbebe5e9361",
+  "发送记录已失效": "m_ac875436d94add0e",
+  "此前请求可能已被桌面端接收，请先检查任务列表": "m_e6407d6df1fd4453",
+  "无法读取上次发送状态，请先检查桌面任务列表": "m_f3403437dcb1ea91",
+  "无法记录发送状态，请稍后重试": "m_c525a19475c2bf4a",
+  "桌面端响应超时": "m_df64ad9870e28316",
+  "原生主机连接已断开": "m_47f7392b1e0e5b9c",
+  "无法识别来源标签页": "m_617d8ddd66402226",
+  "浏览器登录状态仅支持当前标签页的同源资源": "m_10193b24c922a766",
+  "无法识别当前标签页的 Cookie 存储区": "m_f2cbe375fde0dbed",
+  "浏览器 Cookie 包含无法安全传递的字符": "m_4350b0f2f16bff03",
+  "浏览器 Cookie 过长，无法传递给桌面端": "m_7c75f233fc0748a1",
+  "桌面端或原生主机不可用": "m_b798934b75826ae5",
+  "原生主机版本不支持夜间队列，请更新原生主机": "m_ad49abacfa2651db",
+  "无法获取浏览器登录状态": "m_3ed415d2c7a60f51",
+  "无法保存发送记录，请检查扩展存储空间后重试": "m_e9dfcb36108ee701",
+  "无法确认桌面端是否收到任务，请先检查桌面任务列表": "m_b63790faef7a6fa5",
+  "桌面端拒绝了下载请求": "m_b80a1dd09e071184",
+  "桌面端不可用，无法加入夜间队列": "m_2db3a68401a5a7a9",
+  "桌面端不可用，无法合并媒体分片": "m_5309a5c7acd63b34",
+  "无法确认任务是否已发送，请检查下载列表：": "m_d76792d0a6a4f824",
+  "OpenDL 资源嗅探": "m_28dbd8fdf8c3fe41",
+  "正在读取当前标签页…": "m_92c5f312f6eabd59",
+  "仅传递当前标签页同源的非分区 Cookie；重启后需重新获取登录信息": "m_37a327d1cd28db08",
+  "使用浏览器登录状态": "m_d330e87815ec09e0",
+  "设置": "m_settings",
+  "返回资源": "m_back_resources",
+  "仅适用于从扩展资源列表发送的下载，浏览器下载接管不使用此设置。": "m_login_scope",
+  "无法读取浏览器登录设置": "m_login_read_failed",
+  "无法读取浏览器登录设置，请在设置中重试后再发送资源。": "m_login_read_retry_hint",
+  "无法保存浏览器登录设置": "m_login_save_failed",
+  "浏览器登录权限已失效，请在设置中重新授权；当前下载不会使用登录状态。": "m_login_permission_lost",
+  "重试读取设置": "m_retry_settings",
+  "点击下载链接时交由 OpenDL 下载；按住 Shift 点击放行本次到浏览器": "m_2d1ee47e8d19403b",
+  "接管浏览器下载": "m_f1e3d3326569ec6a",
+  "下载队列": "m_f89e9b7e00628311",
+  "主队列": "m_11fb7bfd5602c04b",
+  "夜间队列": "m_9db6dacb284c8d6b",
+  "按不高于所选分辨率的最高画质下载；清单未声明分辨率时自动选择": "m_55ea94621cef5679",
+  "画质": "m_77ccdb7ba817da96",
+  "自动": "m_7eb336e42cb5076b",
+  "重新扫描": "m_daf5103f90cc7d3a",
+  "下载全部媒体": "m_01fec3ca6487fc85",
+  "OpenDL 浏览器嗅探": "m_052732853cd8e6c7",
+  "嗅探页面资源（媒体/链接/下载）并通过原生消息发送给 OpenDL 桌面端下载": "m_7706d9a4235b2845"
+};
+  function t(source, ...values) {
+    const text = ids[source] ? chrome.i18n.getMessage(ids[source], values.map(String)) : "";
+    if (text) return text;
+    let index = 0;
+    return source.replace(/%s/g, () => String(values[index++] ?? ""));
+  }
+  globalThis.openDLI18n = { t };
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = chrome.i18n.getUILanguage();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (node.parentElement?.closest("script,style")) continue;
+      const source = node.nodeValue.trim();
+      if (ids[source]) node.nodeValue = node.nodeValue.replace(source, t(source));
+    }
+    for (const node of document.querySelectorAll("[title]")) {
+      node.title = t(node.title);
+    }
+    for (const node of document.querySelectorAll("[placeholder]")) {
+      node.placeholder = t(node.placeholder);
+    }
+    for (const node of document.querySelectorAll("[aria-label]")) {
+      node.setAttribute("aria-label", t(node.getAttribute("aria-label")));
+    }
+  }
+})();

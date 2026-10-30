@@ -1,0 +1,392 @@
+{
+  "m_context_download": { "message": "使用 OpenDL 下载" },
+  "m_context_http_only": { "message": "仅支持 HTTP 和 HTTPS 链接" },
+  "m_hover_failed": { "message": "发送失败，请检查桌面端连接" },
+  "m_hover_uncertain": { "message": "无法确认是否已发送，请先检查桌面任务列表" },
+  "m_hover_sent": { "message": "已发送至桌面端，请确认添加" },
+  "m_hover_setting": { "message": "页面悬浮下载按钮" },
+  "m_hover_save_failed": { "message": "无法保存悬浮按钮设置" },
+  "m_hover_setting_hint": { "message": "鼠标移到音视频资源链接时显示下载按钮。" },
+  "m_tasks_read_failed": { "message": "无法读取桌面任务" },
+  "m_tasks_host_unsupported": { "message": "原生主机版本不支持任务列表，请更新桌面应用" },
+  "m_wait_desktop_confirmation": { "message": "已发送至桌面端，请确认添加" },
+  "m_download_again": { "message": "再次下载" },
+  "m_download_all": { "message": "下载全部" },
+  "m_tasks_empty": { "message": "暂无浏览器下载任务" },
+  "m_tasks_recent": { "message": "显示最近的浏览器下载任务，最多 200 项" },
+  "m_tasks_more": { "message": "加载更多任务" },
+  "m_tasks_count": { "message": "已显示 $ARG1$ 个浏览器下载任务", "placeholders": { "arg1": { "content": "$1" } } },
+  "m_task_queued": { "message": "排队中" },
+  "m_task_running": { "message": "下载中" },
+  "m_task_done": { "message": "已完成" },
+  "m_task_paused": { "message": "已暂停" },
+  "m_task_failed": { "message": "失败" },
+  "m_open_file": { "message": "打开文件" },
+  "m_open_folder": { "message": "打开文件位置" },
+  "m_open_failed": { "message": "无法打开文件或文件夹" },
+  "m_settings": {
+    "message": "设置"
+  },
+  "m_page_changed_rescan": {
+    "message": "页面已发生变化，请重新扫描"
+  },
+  "m_rules_refresh_failed": {
+    "message": "；站点规则刷新失败，使用已有规则"
+  },
+  "m_inline_formats": {
+    "message": "在线文档格式"
+  },
+  "m_inline_mime_hint": {
+    "message": "可识别常见文件类型、文件名及 /content/格式 路径，例如 pdf, zip, docx；自动捕获使用目标站点的非分区 Cookie。"
+  },
+  "m_inline_formats_hint": {
+    "message": "接管开启时捕获匹配格式的在线文件；多个扩展名用逗号分隔，留空关闭。"
+  },
+  "m_inline_retry": {
+    "message": "重试读取文档设置"
+  },
+  "m_inline_save_retry": {
+    "message": "重试保存文档设置"
+  },
+  "m_inline_read_failed": {
+    "message": "无法读取在线文档格式"
+  },
+  "m_inline_invalid": {
+    "message": "请输入有效的文件扩展名"
+  },
+  "m_inline_save_failed": {
+    "message": "无法保存在线文档格式"
+  },
+  "m_login_permission_lost": {
+    "message": "登录权限已失效，请重新授权"
+  },
+  "m_retry_settings": {
+    "message": "重试读取设置"
+  },
+  "m_back_resources": {
+    "message": "返回资源"
+  },
+  "m_login_scope": {
+    "message": "仅适用于从扩展资源列表发送的下载，浏览器下载接管不使用此设置。"
+  },
+  "m_login_read_failed": {
+    "message": "无法读取浏览器登录设置"
+  },
+  "m_login_read_retry_hint": {
+    "message": "无法读取浏览器登录设置"
+  },
+  "m_login_save_failed": {
+    "message": "无法保存浏览器登录设置"
+  },
+  "m_tab_resources": {
+    "message": "资源"
+  },
+  "m_tab_tasks": {
+    "message": "任务"
+  },
+  "m_file_kind": {
+    "message": "文件"
+  },
+  "m_media_unsupported_host": {
+    "message": "原生主机版本不支持媒体下载选项，请更新原生主机"
+  },
+  "m_desktop_unsupported": {
+    "message": "桌面端版本不支持该下载请求，请更新桌面应用"
+  },
+  "m_update_in_progress": {
+    "message": "应用正在准备更新，请稍后再操作"
+  },
+  "m_journal_write_failed": {
+    "message": "无法保存下载任务，请检查应用日志和存储空间"
+  },
+  "m_desktop_unauthorized": {
+    "message": "桌面端认证失败，请重新启动扩展和桌面应用"
+  },
+  "m_993c060c27a19320": {
+    "message": "下载所选 ($ARG1$)",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      }
+    }
+  },
+  "m_f583ba476b0fc0bb": {
+    "message": "下载所选"
+  },
+  "m_4e1e8ec23edb968e": {
+    "message": "未获得浏览器 Cookie 权限"
+  },
+  "m_a77848af0e3748bb": {
+    "message": "无法获取浏览器 Cookie 权限"
+  },
+  "m_c16bda1c4719e9fd": {
+    "message": "无法保存接管设置"
+  },
+  "m_a8b0bd9c65f7fad5": {
+    "message": "待确认"
+  },
+  "m_fa82f035feee7522": {
+    "message": "请先检查桌面或浏览器下载列表，确认后可重新打开扩展操作"
+  },
+  "m_82dcd6486b88d83e": {
+    "message": "无法读取当前标签页"
+  },
+  "m_ab574192ec8293f3": {
+    "message": "没有活动标签页"
+  },
+  "m_7f7d397ea32802f7": {
+    "message": "扫描超时，请重试"
+  },
+  "m_beb4816bf802eb78": {
+    "message": "选择 "
+  },
+  "m_60823aaec73bd5db": {
+    "message": "已发送"
+  },
+  "m_6a8d8d4cb1eb972f": {
+    "message": "下载清单"
+  },
+  "m_4673a23061656125": {
+    "message": "下载"
+  },
+  "m_4780f3bbfd19ded4": {
+    "message": "浏览器下载"
+  },
+  "m_b8784c8dd5636ff2": {
+    "message": "重试"
+  },
+  "m_6bd4444cf098ce68": {
+    "message": "无法确认任务是否已发送，请先检查下载列表"
+  },
+  "m_fe4cb848b3f716ec": {
+    "message": "无法确认任务是否已发送，请先检查下载列表："
+  },
+  "m_eec15b2c1bab5fae": {
+    "message": "下载视频"
+  },
+  "m_10b9d20fe5cb470d": {
+    "message": "按画质选项的上限下载并合并；支持未加密、音视频合并的 TS 或分片 MP4 点播"
+  },
+  "m_0efe7afb060cb440": {
+    "message": "识别到 "
+  },
+  "m_4385285b1ae221ea": {
+    "message": " 个资源"
+  },
+  "m_8455a02316299ef7": {
+    "message": "（$ARG1$ 个页面框架无法读取或超时）",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      }
+    }
+  },
+  "m_f757a7095a5e339d": {
+    "message": "（仅扫描主框架）"
+  },
+  "m_ac77953a1e064ed6": {
+    "message": "发送失败"
+  },
+  "m_cea87d0c314a30e8": {
+    "message": "桌面 $ARG1$ 项，浏览器 $ARG2$ 项，失败 $ARG3$ 项，待确认 $ARG4$ 项",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      },
+      "arg2": {
+        "content": "$2"
+      },
+      "arg3": {
+        "content": "$3"
+      },
+      "arg4": {
+        "content": "$4"
+      }
+    }
+  },
+  "m_a9a9d230a3252d94": {
+    "message": "，$ARG1$ 项仅下载播放清单",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      }
+    }
+  },
+  "m_f3aaaf4b8474e523": {
+    "message": "；请先检查下载列表"
+  },
+  "m_e7bef9ebd279ca7e": {
+    "message": "；部分资源未扫描"
+  },
+  "m_677e14008532ece9": {
+    "message": "没有可下载的资源"
+  },
+  "m_e44775371d6b54f7": {
+    "message": "发送失败："
+  },
+  "m_7acd4fbebe5e9361": {
+    "message": "当前页面的发送记录已满，请关闭或重新加载页面后重试"
+  },
+  "m_ac875436d94add0e": {
+    "message": "发送记录已失效"
+  },
+  "m_e6407d6df1fd4453": {
+    "message": "此前请求可能已被桌面端接收，请先检查任务列表"
+  },
+  "m_f3403437dcb1ea91": {
+    "message": "无法读取上次发送状态，请先检查桌面任务列表"
+  },
+  "m_c525a19475c2bf4a": {
+    "message": "无法记录发送状态，请稍后重试"
+  },
+  "m_df64ad9870e28316": {
+    "message": "桌面端响应超时"
+  },
+  "m_47f7392b1e0e5b9c": {
+    "message": "原生主机连接已断开"
+  },
+  "m_617d8ddd66402226": {
+    "message": "无法识别来源标签页"
+  },
+  "m_10193b24c922a766": {
+    "message": "浏览器登录状态仅支持当前标签页的同源资源"
+  },
+  "m_f2cbe375fde0dbed": {
+    "message": "无法识别当前标签页的 Cookie 存储区"
+  },
+  "m_4350b0f2f16bff03": {
+    "message": "浏览器 Cookie 包含无法安全传递的字符"
+  },
+  "m_7c75f233fc0748a1": {
+    "message": "浏览器 Cookie 过长，无法传递给桌面端"
+  },
+  "m_b798934b75826ae5": {
+    "message": "桌面端或原生主机不可用"
+  },
+  "m_ad49abacfa2651db": {
+    "message": "原生主机版本不支持夜间队列，请更新原生主机"
+  },
+  "m_3ed415d2c7a60f51": {
+    "message": "无法获取浏览器登录状态"
+  },
+  "m_e9dfcb36108ee701": {
+    "message": "无法保存发送记录，请检查扩展存储空间后重试"
+  },
+  "m_b63790faef7a6fa5": {
+    "message": "无法确认桌面端是否收到任务，请先检查桌面任务列表"
+  },
+  "m_b80a1dd09e071184": {
+    "message": "桌面端拒绝了下载请求"
+  },
+  "m_2db3a68401a5a7a9": {
+    "message": "桌面端不可用，无法加入夜间队列"
+  },
+  "m_5309a5c7acd63b34": {
+    "message": "桌面端不可用，无法合并媒体分片"
+  },
+  "m_d76792d0a6a4f824": {
+    "message": "无法确认任务是否已发送，请检查下载列表："
+  },
+  "m_28dbd8fdf8c3fe41": {
+    "message": "OpenDL 资源嗅探"
+  },
+  "m_92c5f312f6eabd59": {
+    "message": "正在读取当前标签页…"
+  },
+  "m_37a327d1cd28db08": {
+    "message": "仅传递当前标签页同源的非分区 Cookie；重启后需重新获取登录信息"
+  },
+  "m_d330e87815ec09e0": {
+    "message": "使用浏览器登录状态"
+  },
+  "m_2d1ee47e8d19403b": {
+    "message": "点击下载链接时交由 OpenDL 下载；按住 Shift 点击放行本次到浏览器"
+  },
+  "m_f1e3d3326569ec6a": {
+    "message": "接管浏览器下载"
+  },
+  "m_f89e9b7e00628311": {
+    "message": "下载队列"
+  },
+  "m_11fb7bfd5602c04b": {
+    "message": "主队列"
+  },
+  "m_9db6dacb284c8d6b": {
+    "message": "夜间队列"
+  },
+  "m_55ea94621cef5679": {
+    "message": "按不高于所选分辨率的最高画质下载；清单未声明分辨率时自动选择"
+  },
+  "m_77ccdb7ba817da96": {
+    "message": "画质"
+  },
+  "m_7eb336e42cb5076b": {
+    "message": "自动"
+  },
+  "m_daf5103f90cc7d3a": {
+    "message": "重新扫描"
+  },
+  "m_01fec3ca6487fc85": {
+    "message": "下载全部媒体"
+  },
+  "m_052732853cd8e6c7": {
+    "message": "openDL"
+  },
+  "m_7706d9a4235b2845": {
+    "message": "嗅探页面资源（媒体/链接/下载）并通过原生消息发送给 OpenDL 桌面端下载"
+  },
+  "m_dash_single_track": {
+    "message": "下载未加密的单轨 DASH 点播；独立音视频轨暂不支持混流"
+  },
+  "m_dash_ffmpeg": {
+    "message": "下载未加密 DASH 点播；独立音视频轨合并需要本机 FFmpeg"
+  },
+  "m_hls_audio_ffmpeg": {
+    "message": "下载 HLS；独立音轨点播需要本机 FFmpeg，暂不支持独立音轨加密或直播"
+  },
+  "m_audio_language": {
+    "message": "音轨语言"
+  },
+  "m_audio_language_hint": {
+    "message": "留空自动选择；指定语言时优先精确匹配，其次匹配相同主语言"
+  },
+  "m_audio_language_placeholder": {
+    "message": "例如 zh-CN、en"
+  },
+  "m_hls_audio_aes": {
+    "message": "下载 HLS；独立音轨点播需要本机 FFmpeg，支持 AES-128，暂不支持独立音轨直播"
+  },
+  "m_desktop_connecting": {
+    "message": "正在检测桌面端…"
+  },
+  "m_desktop_connected": {
+    "message": "已连接"
+  },
+  "m_desktop_disconnected": {
+    "message": "未连接"
+  },
+  "m_no_resources": {
+    "message": "当前页面暂未嗅探到资源"
+  },
+  "m_tasks_on_desktop": {
+    "message": "任务在桌面端查看与管理"
+  },
+  "m_panel_switch": {
+    "message": "面板切换"
+  },
+  "m_unnamed_resource": {
+    "message": "未命名资源"
+  },
+  "m_copy_link": {
+    "message": "复制链接"
+  },
+  "m_link_copied": {
+    "message": "链接已复制"
+  },
+  "m_copy_failed": {
+    "message": "无法复制链接"
+  },
+  "m_capture_cookie_failed": {
+    "message": "无法获取浏览器登录状态，请从扩展资源列表重试"
+  }
+}

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2012.2531" viewBox="334 336 1375 1351"><svg x="0" y="0" width="2048" height="2048" overflow="visible" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2048 2048"><svg xmlns="http://www.w3.org/2000/svg" width="2048" height="2048" fill="none" viewBox="0 0 1024 1024">
+<!-- SVG created with Arrow, by QuiverAI (https://quiver.ai) -->
+  <defs>
+    <linearGradient id="paint0_linear_5239_65242" x1="39.72" x2="39.72" y1="13.13" y2="65.88" gradientTransform="scale(12.8)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#424242" offset="0"/>
+      <stop stop-color="#333" offset=".3854"/>
+      <stop stop-color="#242424" offset="1"/>
+    </linearGradient>
+    <linearGradient id="paint1_linear_5239_65242" x1="38.52" x2="29.33" y1="27.13" y2="38.64" gradientTransform="scale(12.8)" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#fff" offset="0"/>
+      <stop stop-color="#FCFCFC" offset=".5833"/>
+      <stop stop-color="#E4E4E4" offset="1"/>
+    </linearGradient>
+  </defs>
+  <path d="m713.1 168.1h-405c-78.08 0-140.8 63.1-140.8 142.5v391.2c0 80.26 64.64 141.6 138.8 141.6h407.9c75.52 0 140.5-62.59 140.5-141.6v-391.2c0-77.44-62.85-142.5-141.4-142.5z" fill="url(#paint0_linear_5239_65242)"/>
+  <path d="m345.3 242.3 36.74 181.9c10.11 51.46 36.1 84.99 85.38 121 47.49 33.92 80.13 67.97 108.2 152.1-17.28-97.66-26.75-174-42.5-224.5-13.57-44.67-33.66-79.74-67.07-112.5l-120.7-117.9z" fill="url(#paint1_linear_5239_65242)"/>
+  <path d="m361.6 265.5c33.66 77.31 78.98 152.3 127.6 208-44.03-69.25-85.76-143.9-127.6-208z" fill="#BDBDBD" opacity=".5"/>
+  <path d="m453 654.2c-2.816 0-4.224 2.176-2.816 4.224 21.38 34.3 68.61 58.5 114.7 58.5s96.26-24.83 116.6-58.5c1.408-2.048 0-4.224-2.816-4.224h-20.22c-1.408 0-2.432 0.512-2.944 1.536-18.56 25.6-55.42 42.75-90.62 42.75-36.35 0-75.26-18.43-89.47-42.75-0.64-1.024-1.92-1.536-3.2-1.536h-19.2z" fill="#ccc"/>
+  <path d="m411.5 671.4c-3.2 0-4.096 2.304-2.944 4.352 28.93 48.51 93.95 78.98 155 78.98 66.94 0 134.4-33.54 158.8-78.98 1.28-2.048 0-4.352-2.688-4.352h-17.66c-1.408 0-2.56 0.64-3.2 1.664-27.01 38.78-81.79 62.85-134.8 62.85-53.63 0-108.9-26.5-131.2-62.85-0.768-1.28-2.048-1.664-3.584-1.664h-17.79z" fill="#ccc"/>
+</svg></svg></svg>

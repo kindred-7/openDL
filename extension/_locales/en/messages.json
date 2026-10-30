@@ -1,0 +1,392 @@
+{
+  "m_context_download": { "message": "Download with OpenDL" },
+  "m_context_http_only": { "message": "Only HTTP and HTTPS links are supported" },
+  "m_hover_failed": { "message": "Send failed; check the desktop connection" },
+  "m_hover_uncertain": { "message": "Could not confirm delivery; check the desktop task list first" },
+  "m_hover_sent": { "message": "Sent to desktop; confirm to add" },
+  "m_hover_setting": { "message": "Page download button" },
+  "m_hover_save_failed": { "message": "Could not save the page button setting" },
+  "m_hover_setting_hint": { "message": "Show a download button when hovering over audio and video links." },
+  "m_tasks_read_failed": { "message": "Cannot read desktop tasks" },
+  "m_tasks_host_unsupported": { "message": "The native host does not support the task list; update the desktop app" },
+  "m_wait_desktop_confirmation": { "message": "Sent to desktop; confirm to add" },
+  "m_download_again": { "message": "Download again" },
+  "m_download_all": { "message": "Download all" },
+  "m_tasks_empty": { "message": "No browser downloads yet" },
+  "m_tasks_recent": { "message": "Showing up to 200 recent browser downloads" },
+  "m_tasks_more": { "message": "Load more tasks" },
+  "m_tasks_count": { "message": "Showing $ARG1$ browser downloads", "placeholders": { "arg1": { "content": "$1" } } },
+  "m_task_queued": { "message": "Queued" },
+  "m_task_running": { "message": "Downloading" },
+  "m_task_done": { "message": "Completed" },
+  "m_task_paused": { "message": "Paused" },
+  "m_task_failed": { "message": "Failed" },
+  "m_open_file": { "message": "Open file" },
+  "m_open_folder": { "message": "Show in folder" },
+  "m_open_failed": { "message": "Cannot open the file or folder" },
+  "m_settings": {
+    "message": "Settings"
+  },
+  "m_page_changed_rescan": {
+    "message": "The page changed. Scan again."
+  },
+  "m_rules_refresh_failed": {
+    "message": "; could not refresh site rules; using cached rules"
+  },
+  "m_inline_formats": {
+    "message": "Inline document formats"
+  },
+  "m_inline_mime_hint": {
+    "message": "Recognizes common MIME types, filenames and /content/format paths, such as pdf, zip and docx. Automatic capture uses unpartitioned cookies for the target site."
+  },
+  "m_inline_formats_hint": {
+    "message": "When takeover is enabled, matching online files are offered for download. Separate extensions with commas; leave empty to disable."
+  },
+  "m_inline_retry": {
+    "message": "Retry loading document settings"
+  },
+  "m_inline_save_retry": {
+    "message": "Retry saving document settings"
+  },
+  "m_inline_read_failed": {
+    "message": "Cannot load inline document formats"
+  },
+  "m_inline_invalid": {
+    "message": "Enter valid file extensions"
+  },
+  "m_inline_save_failed": {
+    "message": "Cannot save inline document formats"
+  },
+  "m_login_permission_lost": {
+    "message": "Login permission expired; reauthorize in Settings"
+  },
+  "m_retry_settings": {
+    "message": "Retry loading settings"
+  },
+  "m_back_resources": {
+    "message": "Back to resources"
+  },
+  "m_login_scope": {
+    "message": "Only applies to downloads sent from the extension resource list, not browser download takeover."
+  },
+  "m_login_read_failed": {
+    "message": "Cannot read browser login settings"
+  },
+  "m_login_read_retry_hint": {
+    "message": "Cannot read browser login settings"
+  },
+  "m_login_save_failed": {
+    "message": "Cannot save browser login settings"
+  },
+  "m_tab_resources": {
+    "message": "Resources"
+  },
+  "m_tab_tasks": {
+    "message": "Tasks"
+  },
+  "m_file_kind": {
+    "message": "File"
+  },
+  "m_media_unsupported_host": {
+    "message": "The native host does not support these media options; update the native host"
+  },
+  "m_desktop_unsupported": {
+    "message": "The desktop version does not support this request; update the desktop app"
+  },
+  "m_update_in_progress": {
+    "message": "The application is preparing an update; try again shortly"
+  },
+  "m_journal_write_failed": {
+    "message": "Could not save the download task; check the application logs and available storage"
+  },
+  "m_desktop_unauthorized": {
+    "message": "Desktop authentication failed; restart the extension and desktop application"
+  },
+  "m_993c060c27a19320": {
+    "message": "Download selected ($ARG1$)",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      }
+    }
+  },
+  "m_f583ba476b0fc0bb": {
+    "message": "Download selected"
+  },
+  "m_4e1e8ec23edb968e": {
+    "message": "Browser cookie permission was not granted"
+  },
+  "m_a77848af0e3748bb": {
+    "message": "Cannot obtain browser cookie permission"
+  },
+  "m_c16bda1c4719e9fd": {
+    "message": "Cannot save browser integration settings"
+  },
+  "m_a8b0bd9c65f7fad5": {
+    "message": "Unconfirmed"
+  },
+  "m_fa82f035feee7522": {
+    "message": "Check desktop or browser downloads first, then reopen the extension to continue"
+  },
+  "m_82dcd6486b88d83e": {
+    "message": "Cannot read the active tab"
+  },
+  "m_ab574192ec8293f3": {
+    "message": "No active tab"
+  },
+  "m_7f7d397ea32802f7": {
+    "message": "Scan timed out; retry"
+  },
+  "m_beb4816bf802eb78": {
+    "message": "Select "
+  },
+  "m_60823aaec73bd5db": {
+    "message": "Sent"
+  },
+  "m_6a8d8d4cb1eb972f": {
+    "message": "Download playlist"
+  },
+  "m_4673a23061656125": {
+    "message": "Download"
+  },
+  "m_4780f3bbfd19ded4": {
+    "message": "Browser download"
+  },
+  "m_b8784c8dd5636ff2": {
+    "message": "Retry"
+  },
+  "m_6bd4444cf098ce68": {
+    "message": "Cannot confirm submission; check the download list first"
+  },
+  "m_fe4cb848b3f716ec": {
+    "message": "Cannot confirm submission; check the download list first: "
+  },
+  "m_eec15b2c1bab5fae": {
+    "message": "Download video"
+  },
+  "m_10b9d20fe5cb470d": {
+    "message": "Download and merge up to the selected quality; supports unencrypted on-demand TS or fragmented MP4 with combined audio and video"
+  },
+  "m_0efe7afb060cb440": {
+    "message": "Found "
+  },
+  "m_4385285b1ae221ea": {
+    "message": " resources"
+  },
+  "m_8455a02316299ef7": {
+    "message": " ($ARG1$ page frames inaccessible or timed out)",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      }
+    }
+  },
+  "m_f757a7095a5e339d": {
+    "message": " (main frame only)"
+  },
+  "m_ac77953a1e064ed6": {
+    "message": "Failed to send"
+  },
+  "m_cea87d0c314a30e8": {
+    "message": "Desktop: $ARG1$, browser: $ARG2$, failed: $ARG3$, unconfirmed: $ARG4$",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      },
+      "arg2": {
+        "content": "$2"
+      },
+      "arg3": {
+        "content": "$3"
+      },
+      "arg4": {
+        "content": "$4"
+      }
+    }
+  },
+  "m_a9a9d230a3252d94": {
+    "message": "; $ARG1$ playlist-only downloads",
+    "placeholders": {
+      "arg1": {
+        "content": "$1"
+      }
+    }
+  },
+  "m_f3aaaf4b8474e523": {
+    "message": "; check the download list first"
+  },
+  "m_e7bef9ebd279ca7e": {
+    "message": "; some page frames were not scanned"
+  },
+  "m_677e14008532ece9": {
+    "message": "No downloadable resources"
+  },
+  "m_e44775371d6b54f7": {
+    "message": "Failed to send: "
+  },
+  "m_7acd4fbebe5e9361": {
+    "message": "Submission history for this page is full; close or reload the page and try again"
+  },
+  "m_ac875436d94add0e": {
+    "message": "Submission record expired"
+  },
+  "m_e6407d6df1fd4453": {
+    "message": "The desktop app may have received this request; check the task list first"
+  },
+  "m_f3403437dcb1ea91": {
+    "message": "Cannot read the previous submission status; check the desktop task list first"
+  },
+  "m_c525a19475c2bf4a": {
+    "message": "Cannot record submission status; try again shortly"
+  },
+  "m_df64ad9870e28316": {
+    "message": "Desktop app response timed out"
+  },
+  "m_47f7392b1e0e5b9c": {
+    "message": "Native host disconnected"
+  },
+  "m_617d8ddd66402226": {
+    "message": "Cannot identify the source tab"
+  },
+  "m_10193b24c922a766": {
+    "message": "Browser login is only available for resources from the active tab origin"
+  },
+  "m_f2cbe375fde0dbed": {
+    "message": "Cannot identify the cookie store for the active tab"
+  },
+  "m_4350b0f2f16bff03": {
+    "message": "Browser cookies contain characters that cannot be passed safely"
+  },
+  "m_7c75f233fc0748a1": {
+    "message": "Browser cookies are too long to send to the desktop app"
+  },
+  "m_b798934b75826ae5": {
+    "message": "Desktop app or native host is unavailable"
+  },
+  "m_ad49abacfa2651db": {
+    "message": "Native host does not support the night queue; update the native host"
+  },
+  "m_3ed415d2c7a60f51": {
+    "message": "Cannot obtain browser login information"
+  },
+  "m_e9dfcb36108ee701": {
+    "message": "Cannot save submission history; check extension storage and try again"
+  },
+  "m_b63790faef7a6fa5": {
+    "message": "Cannot confirm whether the desktop app received the task; check its task list first"
+  },
+  "m_b80a1dd09e071184": {
+    "message": "Desktop app rejected the download request"
+  },
+  "m_2db3a68401a5a7a9": {
+    "message": "Desktop app unavailable; cannot add to the night queue"
+  },
+  "m_5309a5c7acd63b34": {
+    "message": "Desktop app unavailable; cannot merge media segments"
+  },
+  "m_d76792d0a6a4f824": {
+    "message": "Cannot confirm submission; check the download list: "
+  },
+  "m_28dbd8fdf8c3fe41": {
+    "message": "OpenDL Resource Sniffer"
+  },
+  "m_92c5f312f6eabd59": {
+    "message": "Reading the active tab…"
+  },
+  "m_37a327d1cd28db08": {
+    "message": "Only send unpartitioned cookies for the active tab origin; refresh login information after restarting"
+  },
+  "m_d330e87815ec09e0": {
+    "message": "Use browser login"
+  },
+  "m_2d1ee47e8d19403b": {
+    "message": "Send download links to OpenDL; hold Shift while clicking to download in the browser"
+  },
+  "m_f1e3d3326569ec6a": {
+    "message": "Handle browser downloads"
+  },
+  "m_f89e9b7e00628311": {
+    "message": "Download queue"
+  },
+  "m_11fb7bfd5602c04b": {
+    "message": "Main queue"
+  },
+  "m_9db6dacb284c8d6b": {
+    "message": "Night queue"
+  },
+  "m_55ea94621cef5679": {
+    "message": "Use the highest quality at or below the selected resolution; choose automatically if the playlist has no resolution information"
+  },
+  "m_77ccdb7ba817da96": {
+    "message": "Quality"
+  },
+  "m_7eb336e42cb5076b": {
+    "message": "Automatic"
+  },
+  "m_daf5103f90cc7d3a": {
+    "message": "Scan again"
+  },
+  "m_01fec3ca6487fc85": {
+    "message": "Download all media"
+  },
+  "m_052732853cd8e6c7": {
+    "message": "openDL"
+  },
+  "m_7706d9a4235b2845": {
+    "message": "Find page resources (media, links and downloads) and send them to the OpenDL desktop app using native messaging"
+  },
+  "m_dash_single_track": {
+    "message": "Download unencrypted single-track DASH on demand; separate audio and video cannot be muxed yet"
+  },
+  "m_dash_ffmpeg": {
+    "message": "Download unencrypted on-demand DASH; merging separate audio and video tracks requires local FFmpeg"
+  },
+  "m_hls_audio_ffmpeg": {
+    "message": "Download HLS; separate audio in on-demand streams requires local FFmpeg. Encrypted or live separate tracks are not supported yet"
+  },
+  "m_audio_language": {
+    "message": "Audio language"
+  },
+  "m_audio_language_hint": {
+    "message": "Leave blank for automatic selection; exact language matches take precedence over the same primary language"
+  },
+  "m_audio_language_placeholder": {
+    "message": "e.g. zh-CN, en"
+  },
+  "m_hls_audio_aes": {
+    "message": "Download HLS; separate audio on demand requires local FFmpeg and supports AES-128. Live separate tracks are not supported yet"
+  },
+  "m_desktop_connecting": {
+    "message": "Checking desktop connection…"
+  },
+  "m_desktop_connected": {
+    "message": "Connected"
+  },
+  "m_desktop_disconnected": {
+    "message": "Disconnected"
+  },
+  "m_no_resources": {
+    "message": "No resources sniffed on this page"
+  },
+  "m_tasks_on_desktop": {
+    "message": "Tasks are viewed and managed in the desktop app"
+  },
+  "m_panel_switch": {
+    "message": "Panel switch"
+  },
+  "m_unnamed_resource": {
+    "message": "Unnamed resource"
+  },
+  "m_copy_link": {
+    "message": "Copy link"
+  },
+  "m_link_copied": {
+    "message": "Link copied"
+  },
+  "m_copy_failed": {
+    "message": "Could not copy link"
+  },
+  "m_capture_cookie_failed": {
+    "message": "Could not obtain browser cookies. Retry from the extension resource list."
+  }
+}

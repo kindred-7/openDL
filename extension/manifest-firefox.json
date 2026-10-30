@@ -1,0 +1,68 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_m_052732853cd8e6c7__",
+  "version": "0.1.0",
+  "icons": {
+    "16": "icon.png",
+    "32": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "description": "__MSG_m_7706d9a4235b2845__",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "opendl@opendl.local",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "tabs",
+    "nativeMessaging",
+    "notifications",
+    "storage",
+    "alarms",
+    "downloads",
+    "webNavigation",
+    "webRequest",
+    "cookies",
+    "clipboardWrite",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background-firefox.js"
+    ]
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "__MSG_m_28dbd8fdf8c3fe41__"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "page.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "resources.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "default_locale": "zh_CN"
+}

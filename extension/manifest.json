@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwOrJUFujsilIUKAsRkfmHQ61MB6uN1jpczMoh++dzYWYR4WtYuh4nhkHqyJqM59a0p0b6qVr8qig3m5qmN4KVBhYa6Vp4izUc6w5B2h4foYMJ5zYDNqxrjGTGZ00cSJs0Q/f3hdntpHNExr/bD4zWbFuIi69ptEIY8Nn7THZr/3tKFeVCTEFDV1R6OJ/8BMqJ9c7DST0UMFE9/6zNyzNtrdBSAkFNusfDjpuL37dQ7PKrpPsB5GkbugOsvoK2ybw+FZ9A7WJnDFrywF7yPsa0omLsQPBdx8QTQ6K6m4knrgppdnM8klWvnG4bAGY3hyCWyd/SSMJI9TgwcOe10wCoQIDAQAB",
+  "name": "__MSG_m_052732853cd8e6c7__",
+  "version": "0.1.0",
+  "icons": {
+    "16": "icon.png",
+    "32": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "description": "__MSG_m_7706d9a4235b2845__",
+  "permissions": [
+    "tabs",
+    "nativeMessaging",
+    "notifications",
+    "storage",
+    "alarms",
+    "downloads",
+    "webNavigation",
+    "webRequest",
+    "cookies",
+    "clipboardWrite",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "__MSG_m_28dbd8fdf8c3fe41__"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "page.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "resources.js",
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true
+    }
+  ],
+  "default_locale": "zh_CN"
+}

@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenDL 标志探索</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap">
+<style>
+:root{--page:#f4f4f5;--bg:#fff;--card:#fafafa;--fg:#09090b;--mu:#71717a;--mu2:#a1a1aa;--bd:#e4e4e7;--bd2:#d4d4d8;--ink:#18181b;--onink:#fafafa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--fg);font:14px/1.5 Geist,ui-sans-serif,system-ui,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:56px 32px 96px;display:flex;flex-direction:column;gap:20px}
+.head{display:flex;align-items:baseline;gap:12px;margin-bottom:12px}
+.head h1{font-size:16px;font-weight:500;margin:0}
+.head span{color:var(--mu);font-size:12px}
+.card{background:var(--bg);border:1px solid var(--bd);border-radius:12px;padding:32px;display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap}
+.col{display:flex;flex-direction:column;gap:22px;min-width:320px}
+.name{display:flex;align-items:baseline;gap:10px}
+.name b{font-size:19px;font-weight:500}
+.name span{color:var(--mu2);font-size:12px}
+.line{color:var(--mu);font-size:13px;margin-top:6px}
+.row{display:flex;align-items:center;gap:18px}
+.row.tight{gap:12px;align-items:flex-end}
+.cap{color:var(--mu2);font-size:11px}
+.tile{display:grid;place-items:center;flex:none}
+.tile svg{width:74%;height:74%;display:block}
+.sq{border-radius:22.5%}
+.sq2{border-radius:22%}
+.tile.ink{background:var(--ink);color:var(--onink)}
+.tile.light{background:#fff;color:var(--ink);border:1px solid var(--bd)}
+.icon{width:232px;height:232px}
+.v{width:96px;height:96px;border-radius:12px}
+.v svg{width:62%;height:62%}
+.s48{width:48px;height:48px}
+.s32{width:32px;height:32px}
+.s24{width:24px;height:24px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<symbol id="m-receive" viewBox="0 0 1024 1024">
+  <g fill="none" stroke="currentColor" stroke-width="76" stroke-linecap="round">
+    <path d="M 300 622 A 230 230 0 0 0 724 622"/>
+    <path d="M 512 252 V 548"/>
+  </g>
+</symbol>
+<symbol id="m-merge" viewBox="0 0 1024 1024">
+  <g fill="none" stroke="currentColor" stroke-width="76" stroke-linecap="round">
+    <path d="M 288 262 A 224 224 0 0 1 512 486 V 762"/>
+    <path d="M 736 262 A 224 224 0 0 0 512 486"/>
+  </g>
+</symbol>
+<symbol id="m-settle" viewBox="0 0 1024 1024">
+  <g fill="currentColor">
+    <rect x="448" y="328" width="128" height="80" rx="40"/>
+    <rect x="352" y="472" width="320" height="80" rx="40"/>
+    <rect x="256" y="616" width="512" height="80" rx="40"/>
+  </g>
+</symbol>
+</defs></svg>
+
+<div class="wrap">
+  <div class="head"><h1>OpenDL 标志探索</h1><span>抽象几何，三案精修</span></div>
+
+  <section class="card" data-screen-label="01 承落">
+    <div class="tile sq ink icon"><svg><use href="#m-receive"/></svg></div>
+    <div class="col">
+      <div>
+        <div class="name"><b>承落</b><span>Receive</span></div>
+        <div class="line">弧底承接，一线垂落</div>
+      </div>
+      <div>
+        <div class="row tight">
+          <div class="tile sq ink s48"><svg><use href="#m-receive"/></svg></div>
+          <div class="tile sq ink s32"><svg><use href="#m-receive"/></svg></div>
+          <div class="tile sq ink s24"><svg><use href="#m-receive"/></svg></div>
+        </div>
+        <div class="cap" style="margin-top:8px">48 / 32 / 24</div>
+      </div>
+      <div class="row">
+        <div class="tile light v"><svg><use href="#m-receive"/></svg></div>
+        <div class="tile ink v"><svg><use href="#m-receive"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-screen-label="02 合流">
+    <div class="tile sq ink icon"><svg><use href="#m-merge"/></svg></div>
+    <div class="col">
+      <div>
+        <div class="name"><b>合流</b><span>Merge</span></div>
+        <div class="line">双流圆转，汇为一脉</div>
+      </div>
+      <div>
+        <div class="row tight">
+          <div class="tile sq ink s48"><svg><use href="#m-merge"/></svg></div>
+          <div class="tile sq ink s32"><svg><use href="#m-merge"/></svg></div>
+          <div class="tile sq ink s24"><svg><use href="#m-merge"/></svg></div>
+        </div>
+        <div class="cap" style="margin-top:8px">48 / 32 / 24</div>
+      </div>
+      <div class="row">
+        <div class="tile light v"><svg><use href="#m-merge"/></svg></div>
+        <div class="tile ink v"><svg><use href="#m-merge"/></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card" data-screen-label="03 沉降">
+    <div class="tile sq ink icon"><svg><use href="#m-settle"/></svg></div>
+    <div class="col">
+      <div>
+        <div class="name"><b>沉降</b><span>Settle</span></div>
+        <div class="line">层层落定，收于一基</div>
+      </div>
+      <div>
+        <div class="row tight">
+          <div class="tile sq ink s48"><svg><use href="#m-settle"/></svg></div>
+          <div class="tile sq ink s32"><svg><use href="#m-settle"/></svg></div>
+          <div class="tile sq ink s24"><svg><use href="#m-settle"/></svg></div>
+        </div>
+        <div class="cap" style="margin-top:8px">48 / 32 / 24</div>
+      </div>
+      <div class="row">
+        <div class="tile light v"><svg><use href="#m-settle"/></svg></div>
+        <div class="tile ink v"><svg><use href="#m-settle"/></svg></div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>
