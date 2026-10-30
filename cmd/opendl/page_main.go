@@ -124,6 +124,8 @@ type mainPage struct {
 	apiServer                           *api.Server
 	preferencesLoaded                   bool
 	settingsWindow                      *settingsPage
+	completionWindow                    *mygo.Window
+	completionQueue                     []completionCardItem
 	addWindow                           *mygo.Window
 	settingsSaveError                   string
 	updater                             updaterState
@@ -135,6 +137,8 @@ type mainPage struct {
 	defaultDirPending                   bool
 	defaultConnsPending                 bool
 	showColumns, showAbout              bool
+	copyFeedbackKey                     string
+	copyFeedbackUntil                   time.Time
 	showExtensionGuide                  bool
 	showShortcuts                       bool
 	showDelete, deleteFiles, deleteBusy bool
@@ -434,6 +438,9 @@ func (pg *mainPage) onChange() {
 				case <-pg.stop:
 					return
 				default:
+					if pg.preferences.NotifyApp {
+						pg.showCompletionCard(name, path)
+					}
 					if pg.preferences.NotifyComplete {
 						completeNotifier.add(name, id)
 					}
@@ -807,6 +814,49 @@ func d1IconButton(c *ui.Context, p *d1Palette, name string) ui.Element {
 		d1Icon(c, name, 16, p.mu)
 	})
 	return e
+}
+
+// copyFeedback keeps success visible briefly without adding descriptive text.
+func (pg *mainPage) copyFeedback(c *ui.Context, key string) bool {
+	remaining := time.Until(pg.copyFeedbackUntil)
+	if pg.copyFeedbackKey != key || remaining <= 0 {
+		return false
+	}
+	c.After(remaining)
+	return true
+}
+
+func (pg *mainPage) markCopied(key string) {
+	pg.copyFeedbackKey = key
+	pg.copyFeedbackUntil = time.Now().Add(1600 * time.Millisecond)
+	if pg.svc != nil {
+		pg.svc.Invalidate()
+	}
+}
+
+func d1CopyControl(c *ui.Context, p *d1Palette, key, label string, copied, iconOnly, enabled bool) ui.Element {
+	c.Key(key)
+	button := ui.ButtonBase(c).Height(style.HeightButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Disabled(!enabled)
+	if iconOnly {
+		button.Size(22, 22)
+	} else {
+		button.Padding(0, 10).Border(1, p.bd)
+	}
+	hoverMotion(button, p.bg, p.hover)
+	progress := button.Animate("copy-success", motionTarget(copied), 160*time.Millisecond)
+	button.Children(func() {
+		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+			icon := style.IconCopy
+			if copied {
+				icon = style.IconCheck
+			}
+			style.Icon(c, icon, 16, p.fg).Scale(1+0.08*progress, 1+0.08*progress)
+			if !iconOnly {
+				ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(p.fg)
+			}
+		})
+	})
+	return button
 }
 
 func d1Sep(c *ui.Context, p *d1Palette) {
@@ -1983,13 +2033,14 @@ func (pg *mainPage) logTab(c *ui.Context, p *d1Palette, r d1Row) {
 	ui.Column(c).Padding(14).Gap(6).Children(func() {
 		ui.Row(c).Margin(0, 0, 8, 0).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, tr("任务日志")).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
-			copyLog := d1IconButton(c, p, "copy").Size(22, 22)
+			copyKey := "log:" + r.id
+			copyLog := d1CopyControl(c, p, copyKey, "复制日志", pg.copyFeedback(c, copyKey), true, pg.svc != nil)
 			if copyLog.Clicked() {
 				text := strings.Join(lines, "\n")
 				if pg.svc != nil {
 					pg.clipLast = text
 					pg.svc.WriteClipboard(text)
-					pg.flash(tr("已复制日志"))
+					pg.markCopied(copyKey)
 				}
 			}
 		})
@@ -2084,7 +2135,11 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 			}
 		}
 		// 短时状态提示居中，其余空间推到右侧。
-		if pg.status != "" && time.Since(pg.statusAt) < 5*time.Second {
+		if pg.copyFeedback(c, "url") {
+			indicator := ui.Box(c).MarginStart(ui.Auto).Role(ui.RoleStatus).Label(tr("已复制到剪贴板"))
+			progress := indicator.Animate("copy-status", 1, 160*time.Millisecond)
+			indicator.Children(func() { style.Icon(c, style.IconCheck, 16, p.pri).Scale(0.9+0.1*progress, 0.9+0.1*progress) })
+		} else if pg.status != "" && time.Since(pg.statusAt) < 5*time.Second {
 			ui.Text(c, tr(pg.status)).MarginStart(ui.Auto).Shrink(1).MinWidth(0).Role(ui.RoleStatus).FontSize(style.TextSM).FontWeight(style.WeightMedium).TextColor(p.fg).SingleLine().Tooltip(tr(pg.status))
 		}
 		// 右侧：下载/排队数量、下载速度（文字与「N 个排队」同款字型）。
@@ -2889,7 +2944,7 @@ func (pg *mainPage) copyDownloadURL(address string) {
 	}
 	pg.clipLast = address
 	pg.svc.WriteClipboard(address)
-	pg.flash(tr("已复制下载链接"))
+	pg.markCopied("url")
 }
 
 func (pg *mainPage) clipboardWatch() {

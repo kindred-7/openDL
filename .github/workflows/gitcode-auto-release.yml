@@ -20,6 +20,9 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    outputs:
+      tag: ${{ steps.select.outputs.tag }}
+      version: ${{ steps.select.outputs.version }}
     timeout-minutes: 45
     defaults:
       run:
@@ -40,6 +43,8 @@ jobs:
           if ($tags.Count -eq 0) { throw 'No stable GitCode version tag found.' }
           if ($tags.Count -gt 1 -and $tags[0].Version -eq $tags[1].Version) { throw 'Multiple tags represent the same newest version.' }
           $tag = $tags[0].Tag
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "version=$($tags[0].Version)" >> $env:GITHUB_OUTPUT
           $encoded = [Uri]::EscapeDataString($tag)
           $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
           try {
@@ -56,8 +61,6 @@ jobs:
             if ($latestTag -notmatch '^v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$') { throw 'Latest GitCode release has an invalid version.' }
             if ($tags[0].Version -le [version]$latestTag.TrimStart('v')) { throw 'The tag is not newer than the latest published release.' }
             "publish=true" >> $env:GITHUB_OUTPUT
-            "tag=$tag" >> $env:GITHUB_OUTPUT
-            "version=$($tags[0].Version)" >> $env:GITHUB_OUTPUT
           }
 
       - name: Fetch and check GitCode source
@@ -124,3 +127,125 @@ jobs:
           $ErrorActionPreference = 'Stop'
           if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
           ./scripts/publish-gitcode-release.ps1 -Installer "build/windows-amd64/OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe" -Manifest 'build/windows-amd64/releases.json' -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -Tag $env:RELEASE_TAG
+
+  sync-github:
+    needs: release
+    runs-on: windows-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      GH_REPO: ${{ github.repository }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Fetch the published GitCode release and source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_VERSION -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or ($env:RELEASE_TAG -cne $env:RELEASE_VERSION -and $env:RELEASE_TAG -cne "v$env:RELEASE_VERSION")) { throw 'Invalid release tag.' }
+          $tag = [Uri]::EscapeDataString($env:RELEASE_TAG)
+          $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
+          $release = Invoke-RestMethod -Uri "$api/tags/$tag"
+          $installer = "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
+          $names = @($release.assets | ForEach-Object { $_.name })
+          if ($release.release_status -eq 'pre' -or $release.prerelease -eq $true -or $names -cnotcontains $installer -or $names -cnotcontains 'releases.json') { throw 'GitCode release is not complete.' }
+          git clone https://gitcode.com/kindred-wu/openDL.git source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to clone GitCode source.' }
+          Set-Location source
+          git checkout --detach "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to check out the release tag.' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Release tag is not on GitCode main.' }
+          $version = [string](Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          if ($version -cne $env:RELEASE_VERSION) { throw 'Release tag and source version differ.' }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          foreach ($name in @($installer, 'releases.json')) {
+            $nameEncoded = [Uri]::EscapeDataString($name)
+            try { Invoke-WebRequest -Uri "$api/$tag/attach_files/$nameEncoded/download" -OutFile (Join-Path 'release-assets' $name) }
+            catch { throw "Failed to download GitCode asset: $name" }
+          }
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: source/go.mod
+          cache: false
+
+      - name: Verify signed release assets
+        working-directory: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $match = [regex]::Match([IO.File]::ReadAllText('cmd/opendl/page_update.go'), '(?m)^var officialUpdatePublicKey = "([^"]+)"')
+          if (-not $match.Success) { throw 'Cannot determine the update public key.' }
+          $key = Join-Path $env:RUNNER_TEMP ('opendl-public-' + [guid]::NewGuid().ToString('N'))
+          try {
+            [IO.File]::WriteAllText($key, $match.Groups[1].Value, [Text.UTF8Encoding]::new($false))
+            $installer = "release-assets/OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
+            & go run ./cmd/release-sign -verify release-assets/releases.json -public $key -asset "windows/amd64/installer=$installer"
+            if ($LASTEXITCODE -ne 0) { throw 'GitCode assets failed signature or checksum verification.' }
+          } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
+          $envelope = Get-Content release-assets/releases.json -Raw | ConvertFrom-Json
+          $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+          if ($manifest.version -cne $env:RELEASE_VERSION) { throw 'Signed manifest version differs from release tag.' }
+
+      - name: Create or complete GitHub release
+        working-directory: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $sha = (& git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $sha -notmatch '^[a-f0-9]{40}$') { throw 'Cannot determine the source commit.' }
+          $repo = $env:GH_REPO
+          $tag = [Uri]::EscapeDataString($env:RELEASE_TAG)
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json'; 'X-GitHub-Api-Version' = '2022-11-28' }
+          $api = "https://api.github.com/repos/$repo"
+          try { $existingTag = Invoke-RestMethod -Headers $headers -Uri "$api/commits/$tag" }
+          catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw 'Failed to inspect the GitHub tag.' }
+            $existingTag = $null
+          }
+          if ($existingTag) {
+            if ($existingTag.sha -cne $sha) { throw 'The GitHub tag points to a different commit; it will not be replaced.' }
+          } else {
+            try { Invoke-RestMethod -Headers $headers -Uri "$api/commits/$sha" | Out-Null }
+            catch { throw 'The GitCode release commit is not present on GitHub. Push main to GitHub first.' }
+            $body = @{ ref = "refs/tags/$env:RELEASE_TAG"; sha = $sha } | ConvertTo-Json -Compress
+            Invoke-RestMethod -Method Post -Headers $headers -Uri "$api/git/refs" -ContentType 'application/json' -Body $body | Out-Null
+          }
+          try { $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag" }
+          catch {
+            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw 'Failed to inspect the GitHub release.' }
+            $release = $null
+          }
+          $notes = "docs/release-notes-$env:RELEASE_VERSION.md"
+          if (-not (Test-Path -LiteralPath $notes)) { throw 'Release notes are missing.' }
+          if (-not $release) {
+            & gh release create $env:RELEASE_TAG --repo $repo --verify-tag --draft --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to create GitHub draft release.' }
+            $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
+          }
+          $installer = "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
+          foreach ($name in @($installer, 'releases.json')) {
+            $existing = @($release.assets | Where-Object { $_.name -ceq $name })
+            $local = Join-Path 'release-assets' $name
+            if ($existing.Count -gt 1) { throw "Duplicate GitHub asset: $name" }
+            if ($existing.Count -eq 1) {
+              $temp = Join-Path $env:RUNNER_TEMP ('opendl-github-' + [guid]::NewGuid().ToString('N'))
+              New-Item -ItemType Directory -Path $temp | Out-Null
+              try {
+                & gh release download $env:RELEASE_TAG --repo $repo --pattern $name --dir $temp
+                if ($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath (Join-Path $temp $name) -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash) { throw "Existing GitHub asset differs: $name" }
+              } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+            } elseif ($release.draft) {
+              & gh release upload $env:RELEASE_TAG $local --repo $repo
+              if ($LASTEXITCODE -ne 0) { throw "Failed to upload GitHub asset: $name" }
+            } else { throw "Published GitHub release is missing $name; it will not be modified." }
+          }
+          if ($release.draft) {
+            & gh release edit $env:RELEASE_TAG --repo $repo --draft=false
+            if ($LASTEXITCODE -ne 0) { throw 'Failed to publish the GitHub draft release.' }
+          }

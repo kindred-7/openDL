@@ -44,7 +44,7 @@ func (m *Manager) downloadDASHLiveSingle(t *Task, original, manifestURL *url.URL
 	part := filePath + ".part"
 	if filePath == "" {
 		var err error
-		filePath, part, err = claimPath(t.directory, pathrec.SanitizeFilename(name+".mp4"))
+		filePath, part, err = claimPath(t.directory, pathrec.SanitizeFilename(name+".mp4"), m.overwriteExisting.Load())
 		if err != nil {
 			return err
 		}

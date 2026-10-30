@@ -142,7 +142,9 @@ var settingsEntries = []settingsEntry{
 	{"accent", "界面", "主题色", "选择全局强调色，适配亮色和深色主题。", "颜色 主题色 色盘 强调色 radix color accent"},
 	{"clipboard", "下载", "剪贴板监听", "检测到剪贴板链接时打开添加下载对话框确认。", "剪贴板 监听 链接"},
 	{"drag-file-action", "下载", "拖出文件时", "将已完成的文件拖到窗口外时使用的操作。移动后原路径可能失效。", "拖拽 拖放 文件 复制 移动"},
-	{"notify-complete", "常规", "下载完成通知", "任务下载完成时显示系统通知。", "通知 提醒 完成 声音 notify"},
+	{"file-exists", "下载", "文件已存在时", "下载目录已有同名文件时，覆盖原文件或创建副本。", "重名 覆盖 副本 已存在 同名 duplicate overwrite"},
+	{"notify-system", "常规", "系统通知", "任务下载完成时显示系统通知。", "通知 提醒 系统 完成 声音 notify system"},
+	{"notify-app", "常规", "应用通知", "任务下载完成时在屏幕右下角弹出完成卡片。", "通知 提醒 应用 卡片 弹窗 完成 notify card"},
 	{"autostart", "常规", "开机自动启动", "登录系统后自动启动 OpenDL。", "开机 自动 启动 登录 autostart"},
 	{"min-tray-start", "常规", "启动时最小化到托盘", "启动后主窗口不显示，驻留托盘，可从托盘重新打开。", "托盘 启动 最小化 隐藏 驻留 tray start"},
 	{"min-tray-close", "常规", "关闭时最小化到托盘", "关闭主窗口后驻留托盘继续运行，可从托盘重新打开或退出。", "托盘 关闭 最小化 后台 运行 驻留 tray close background"},
@@ -184,7 +186,7 @@ type settingsGroup struct {
 
 // settingsGroups 是设置卡片的展示顺序。
 var settingsGroups = []settingsGroup{
-	{"常规", "常规", []string{"language", "notify-complete", "autostart", "min-tray-start", "min-tray-close"}},
+	{"常规", "常规", []string{"language", "notify-system", "notify-app", "autostart", "min-tray-start", "min-tray-close"}},
 	{"应用更新", "常规", []string{"updates"}},
 
 	{"外观", "界面", []string{"appearance"}},
@@ -192,7 +194,7 @@ var settingsGroups = []settingsGroup{
 	{"面板", "界面", []string{"detail", "reset-layout"}},
 	{"键盘快捷键", "界面", []string{"shortcuts"}},
 
-	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "connections", "max-connections", "unverified-resume"}},
+	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "file-exists", "connections", "max-connections", "unverified-resume"}},
 	{"速度与流量", "下载", []string{"speed", "traffic-quota"}},
 	{"媒体合并程序", "下载", []string{"media-mux"}},
 	{"分类保存目录", "下载", []string{"category-dirs"}},
@@ -1204,8 +1206,10 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 						s.owner.saveAppPreferences()
 						s.changed()
 					})
-				case "notify-complete":
-					settingsSwitch(c, p, "下载完成通知", &s.owner.preferences.NotifyComplete).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
+				case "notify-system":
+					settingsSwitch(c, p, "系统通知", &s.owner.preferences.NotifyComplete).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
+				case "notify-app":
+					settingsSwitch(c, p, "应用通知", &s.owner.preferences.NotifyApp).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "autostart":
 					settingsSwitch(c, p, "开机自动启动", &s.autoStart).OnChange(func() {
 						s.autostartError = ""
@@ -1237,6 +1241,13 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "drag-file-action":
 					d1Choice(c, p, "拖出文件时", &s.owner.preferences.DragFileAction, []d1Option{{value: "", label: "移动"}, {value: "copy", label: "复制"}}).
 						Width(settingsControlWidth).Shrink(0).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
+				case "file-exists":
+					d1Choice(c, p, "文件已存在时", &s.owner.preferences.FileExistsAction, []d1Option{{value: "", label: "覆盖原文件"}, {value: "copy", label: "创建副本"}}).
+						Width(settingsControlWidth).Shrink(0).OnChange(func() {
+							s.owner.mgr.SetOverwriteExisting(s.owner.preferences.FileExistsAction != "copy")
+							s.owner.saveAppPreferences()
+							s.changed()
+						})
 				case "connections":
 					d1Choice(c, p, "默认连接数", &s.connections, []d1Option{{value: "-1", label: "自动"}, {value: "1", label: "1"}, {value: "4", label: "4"}, {value: "8", label: "8"}, {value: "16", label: "16"}, {value: "32", label: "32"}}).Width(settingsControlWidth).Shrink(0).
 						OnChange(func() {

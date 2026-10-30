@@ -105,7 +105,15 @@ func (pg *mainPage) menuGroup(c *ui.Context, p *d1Palette, id, label, icon strin
 		hoverState := ui.Local(button, "menu-group-hover", func() bool { return true })
 		ui.Overlay(c, func() {
 			panel := ui.Box(c).AttachTo(button, ui.AnchorTopEnd, ui.AnchorTopStart).Margin(-4, 0, 0, 6)
-			d1DropdownPanel(panel, p).Width(220).Role(ui.RoleMenu).Label(tr(label)).FocusGroup(ui.Vertical).Children(body)
+			width, height := c.Size()
+			menuWidth := float32(300)
+			if width > 0 {
+				menuWidth = min(menuWidth, max(float32(1), width-32))
+			}
+			menuHeight := max(float32(1), height-32)
+			d1DropdownPanel(panel, p).Width(menuWidth).Role(ui.RoleMenu).Label(tr(label)).FocusGroup(ui.Vertical).Children(func() {
+				ui.Scroll(c).FillWidth().MaxHeight(menuHeight).Children(body)
+			})
 			if panel.OverlayShortcut(0, ui.KeyEscape) {
 				pg.appMenuSection = ""
 			}
@@ -141,27 +149,77 @@ func appVersionLabel(version string) string {
 	return strings.TrimPrefix(strings.TrimSpace(version), "v")
 }
 
+func (pg *mainPage) openUpdateSettings() {
+	pg.openSettings()
+	if s := pg.settingsWindow; s != nil && s.win != nil {
+		s.section = "常规"
+		s.query = "应用更新"
+		s.searchSection = ""
+		s.win.Invalidate()
+		pg.checkForUpdates(false)
+	}
+}
+
+func (pg *mainPage) openAboutLink(address string) {
+	win := pg.win
+	go func() {
+		if err := mygo.Shell.OpenExternal(address); err != nil && win != nil {
+			win.Update(func() { pg.flash(tr("无法打开链接") + ": " + err.Error()) })
+		}
+	}()
+}
+
+func d1AboutLink(c *ui.Context, p *d1Palette, label string) ui.Element {
+	c.Key("about-link:" + label)
+	button := ui.ButtonBase(c).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(style.HeightButton).Padding(0, 4).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label))
+	hoverMotion(button, ui.Transparent, p.hover)
+	button.Children(func() {
+		ui.Text(c, tr(label)).Shrink(1).MinWidth(0).FontSize(style.TextBase).TextColor(p.pri).SingleLine()
+	})
+	return button
+}
+
 func (pg *mainPage) aboutDialog(c *ui.Context, p *d1Palette) {
 	c.Key("about-dialog")
+	windowWidth, _ := c.Size()
+	width := float32(440)
+	if windowWidth > 0 {
+		width = min(width, max(float32(1), windowWidth-32))
+	}
 	ui.DialogBase(c, &pg.showAbout, func(back, panel ui.Element) {
 		back.Background(p.fg.Alpha(.15)).Center()
-		panel.Width(400).Radius(style.RadiusLG).Border(1, p.bd).Background(p.bg).Children(func() {
+		panel.Width(width).Radius(style.RadiusLG).Border(1, p.bd).Background(p.bg).Children(func() {
 			ui.Column(c).FillWidth().Children(func() {
 				ui.Row(c).FillWidth().Padding(12, 16).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, tr("关于")+" "+appBrand).Grow(1).FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg)
 					d1IconButton(c, p, "x").Size(28, 28).Label(tr("关闭")).OnClick(func() { pg.showAbout = false })
 				})
 				ui.Box(c).FillWidth().Height(1).Background(p.bd)
-				ui.Column(c).FillWidth().Padding(32, 24).Gap(16).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).FillWidth().Padding(24, 20).Gap(20).AlignItems(ui.Center).Children(func() {
 					if appIconBitmap != nil {
 						ui.Image(c, appIconBitmap).Size(72, 72)
 					} else {
 						style.Icon(c, style.IconDownload, 48, p.fg)
 					}
-					ui.Text(c, appBrand).FontSize(style.TextLG).FontWeight(style.WeightMedium).TextColor(p.fg).TextAlign(ui.Center)
-					ui.Text(c, tr("版本：")+appVersionLabel(d1AppVersion())).FontSize(style.TextSM).TextColor(p.mu).TextAlign(ui.Center)
-					ui.Text(c, appBrand+tr(" 开源的桌面下载管理器")).FontSize(style.TextBase).TextColor(p.fg).TextAlign(ui.Center)
-					ui.Text(c, tr("多连接下载、队列管理与定时任务")).FontSize(style.TextSM).TextColor(p.mu).TextAlign(ui.Center)
+					ui.Column(c).FillWidth().Gap(6).AlignItems(ui.Center).Children(func() {
+						ui.Text(c, appBrand).FontSize(style.TextLG).FontWeight(style.WeightMedium).TextColor(p.fg).TextAlign(ui.Center)
+						ui.Text(c, tr("版本：")+d1AppVersion()).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg).TextAlign(ui.Center)
+						ui.Text(c, appBrand+tr(" 开源的桌面下载管理器")).FontSize(style.TextBase).TextColor(p.mu).TextAlign(ui.Center)
+					})
+					ui.Row(c).FillWidth().Gap(8).Justify(ui.Center).Children(func() {
+						d1CopyControl(c, p, "about-copy-version", "复制版本", pg.copyFeedback(c, "version"), false, pg.svc != nil).OnClick(func() {
+							if pg.svc != nil {
+								pg.svc.WriteClipboard(d1AppVersion())
+								pg.markCopied("version")
+							}
+						})
+						d1Button(c, p, "检查更新", "redo").OnClick(func() { pg.showAbout = false; pg.openUpdateSettings() })
+					})
+					ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
+						d1AboutLink(c, p, "项目主页").OnClick(func() { pg.openAboutLink("https://gitcode.com/kindred-wu/openDL") })
+						d1AboutLink(c, p, "问题反馈").OnClick(func() { pg.openAboutLink("https://github.com/kindred-7/openDL/issues") })
+						d1AboutLink(c, p, "MIT 开源协议").OnClick(func() { pg.openAboutLink("https://github.com/kindred-7/openDL/blob/main/LICENSE") })
+					})
 				})
 				ui.Box(c).FillWidth().Height(1).Background(p.bd)
 				ui.Row(c).FillWidth().Padding(12, 16).Justify(ui.End).Children(func() {

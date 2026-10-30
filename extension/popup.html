@@ -30,6 +30,13 @@
         <span><strong>使用浏览器登录状态</strong></span>
         <input id="browser-login" type="checkbox" disabled />
       </label>
+      <label class="settings-document" for="sniff-formats"><strong>自定义嗅探格式</strong>
+        <input id="sniff-formats" type="text" placeholder="例如：mobi, epub, psd" aria-describedby="sniff-formats-hint sniff-formats-status" disabled />
+      </label>
+      <p id="sniff-formats-hint" class="settings-hint">在默认格式之外添加扩展名，以逗号或空格分隔；不影响浏览器下载接管。</p>
+      <p id="sniff-formats-status" class="settings-status" role="status" aria-live="polite"></p>
+      <button id="sniff-formats-save" type="button" disabled>保存嗅探格式</button>
+      <button id="sniff-formats-retry" class="hidden" type="button">重试读取嗅探设置</button>
       <label class="settings-document" for="inline-formats"><strong>在线文档格式</strong>
         <input id="inline-formats" type="text" aria-describedby="inline-formats-status" disabled />
       </label>

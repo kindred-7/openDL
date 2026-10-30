@@ -167,6 +167,8 @@ h1 { font-size: 15px; font-weight: 650; }
 .settings-option input { flex: none; width: 16px; height: 16px; margin: 2px 0; accent-color: var(--pri); }
 .settings-description { display: block; margin: 6px 0 0; color: var(--mu); font-size: 12px; line-height: 1.5; }
 .settings-status { margin: 0; color: var(--bad); font-size: 12px; }
+.settings-hint { margin: 0; color: var(--mu); font-size: 12px; line-height: 1.4; }
+.settings-status[data-state="success"] { color: var(--mu); }
 .settings-status:empty { display: none; }
 #settings-back, #settings-retry { align-self: flex-start; }
 #settings-retry.hidden { display: none; }
@@ -180,6 +182,10 @@ h1 { font-size: 15px; font-weight: 650; }
 .row button[data-mode], .row button[data-copy] { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; color: var(--mu); font-size: 0; opacity: 0; }
 .row button[data-mode]::before, .row button[data-copy]::before { content: ""; width: 16px; height: 16px; background: currentColor; mask: url("icons/download.svg") center / contain no-repeat; }
 .row button[data-copy]::before { mask-image: url("icons/copy.svg"); }
+.row button[data-copy][data-copied] { opacity: 1; color: var(--pri); }
+.row button[data-copy][data-copied]::before { mask-image: url("icons/check.svg"); animation: copy-confirm 160ms ease-out; }
+@keyframes copy-confirm { from { transform: scale(.85); opacity: .65; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .row button[data-copy][data-copied]::before { animation: none; } }
 .row button[data-mode="hls-ts"]::before, .row button[data-mode="dash-fmp4"]::before { mask-image: url("icons/film.svg"); }
 .row button[data-mode][data-finished]:not([data-uncertain])::before { mask-image: url("icons/check.svg"); }
 .row button[data-mode][data-finished]:not([data-uncertain]):hover::before, .row button[data-mode][data-finished]:not([data-uncertain]):focus-visible::before { mask-image: url("icons/download.svg"); }

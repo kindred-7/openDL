@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"openDL/download"
 	"openDL/style"
@@ -894,8 +895,8 @@ func (a *app) detailByID(snaps []download.Snapshot) (download.Snapshot, bool) {
 func (a *app) copyText(s string) {
 	if a.svc != nil {
 		a.svc.WriteClipboard(s)
+		a.copyUntil = time.Now().Add(1600 * time.Millisecond)
 	}
-	a.status = tr("已复制到剪贴板")
 }
 
 // hashFor returns the checksums of the selected file, computing them in the

@@ -657,7 +657,7 @@ func (m *Manager) downloadResolvedMedia(t *Task, original, base *url.URL, segmen
 	}
 	part := filePath + ".part"
 	if filePath == "" {
-		filePath, part, err = claimPath(t.directory, name)
+		filePath, part, err = claimPath(t.directory, name, m.overwriteExisting.Load())
 		if err != nil {
 			return err
 		}

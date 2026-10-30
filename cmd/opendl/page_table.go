@@ -359,13 +359,18 @@ func (pg *mainPage) rowActions(c *ui.Context, p *d1Palette, r d1Row, reveal bool
 		if !r.pending && !r.snap.Held && (r.snap.State == download.Running || r.snap.State == download.Queued) {
 			icon, label = "pause", "暂停任务"
 		}
-		enabled := r.pending || r.snap.State != download.Done
-		button := rowActionButton(c, p, "切换下载状态", label, icon, enabled)
+		done := !r.pending && r.snap.State == download.Done
+		if done {
+			icon, label = "redo", "重新下载"
+		}
+		button := rowActionButton(c, p, "切换下载状态", label, icon, true)
 		if button.Clicked() {
 			clicked = true
 		}
 		button.OnClick(func() {
-			if r.pending || r.snap.State != download.Done {
+			if done {
+				pg.redownload(r)
+			} else if r.pending || r.snap.State != download.Done {
 				pg.toggleRow(r)
 			}
 		})

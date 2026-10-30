@@ -100,7 +100,7 @@ func (m *Manager) downloadDualMediaWith(t *Task, transfer dualTrackTransfer) err
 		if strings.EqualFold(ext, ".mpd") || strings.EqualFold(ext, ".m3u8") || strings.EqualFold(ext, ".ts") || strings.EqualFold(ext, ".mp4") {
 			name = strings.TrimSuffix(name, ext)
 		}
-		filePath, _, err = claimPath(t.directory, pathrec.SanitizeFilename(name+".mp4"))
+		filePath, _, err = claimPath(t.directory, pathrec.SanitizeFilename(name+".mp4"), m.overwriteExisting.Load())
 		if err != nil {
 			return err
 		}

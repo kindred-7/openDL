@@ -406,7 +406,7 @@ func (m *Manager) downloadFTP(t *Task) error {
 	t.metaMu.Unlock()
 	part := filePath + ".part"
 	if filePath == "" {
-		filePath, part, err = claimPath(t.directory, name)
+		filePath, part, err = claimPath(t.directory, name, m.overwriteExisting.Load())
 		if err != nil {
 			return err
 		}

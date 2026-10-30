@@ -1,4 +1,13 @@
 {
+  "m_sniff_formats": { "message": "Custom resource formats" },
+  "m_sniff_formats_placeholder": { "message": "For example: mobi, epub, psd" },
+  "m_sniff_formats_hint": { "message": "Add extensions to the defaults, separated by commas or spaces. Browser download interception is unchanged." },
+  "m_sniff_formats_save": { "message": "Save resource formats" },
+  "m_sniff_formats_retry": { "message": "Retry loading formats" },
+  "m_sniff_formats_read_failed": { "message": "Could not load resource formats" },
+  "m_sniff_formats_invalid": { "message": "Enter valid extensions, up to 64" },
+  "m_sniff_formats_saved": { "message": "Saved. Rescan the page for resources." },
+  "m_sniff_formats_save_failed": { "message": "Could not save resource formats. Try again." },
   "m_context_download": { "message": "Download with OpenDL" },
   "m_context_http_only": { "message": "Only HTTP and HTTPS links are supported" },
   "m_hover_failed": { "message": "Send failed; check the desktop connection" },

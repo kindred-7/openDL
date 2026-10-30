@@ -1,6 +1,15 @@
 // Source messages identify presentation text only. Browser locale selects the catalog.
 (() => {
   const ids = {
+  "自定义嗅探格式": "m_sniff_formats",
+  "例如：mobi, epub, psd": "m_sniff_formats_placeholder",
+  "在默认格式之外添加扩展名，以逗号或空格分隔；不影响浏览器下载接管。": "m_sniff_formats_hint",
+  "保存嗅探格式": "m_sniff_formats_save",
+  "重试读取嗅探设置": "m_sniff_formats_retry",
+  "无法读取嗅探格式": "m_sniff_formats_read_failed",
+  "请输入有效的文件扩展名，最多 64 个": "m_sniff_formats_invalid",
+  "已保存，请重新扫描页面资源": "m_sniff_formats_saved",
+  "无法保存嗅探格式，请重试": "m_sniff_formats_save_failed",
   "页面悬浮下载按钮": "m_hover_setting",
   "无法保存悬浮按钮设置": "m_hover_save_failed",
   "鼠标移到音视频资源链接时显示下载按钮。": "m_hover_setting_hint",

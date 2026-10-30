@@ -42,9 +42,11 @@ type appPreferences struct {
 	AllowUnverifiedResume bool                       `json:"allow_unverified_resume,omitempty"`
 	Clipboard             bool                       `json:"clipboard"`
 	DragFileAction        string                     `json:"drag_file_action,omitempty"`
+	FileExistsAction      string                     `json:"file_exists_action,omitempty"`
 	MinTrayStart          bool                       `json:"min_tray_start"`
 	MinTrayClose          bool                       `json:"min_tray_close"`
 	NotifyComplete        bool                       `json:"notify_complete"`
+	NotifyApp             bool                       `json:"notify_app"`
 	FinishAction          string                     `json:"finish_action,omitempty"`
 	FinishDays            []int                      `json:"finish_days,omitempty"`
 	FinishProgram         string                     `json:"finish_program,omitempty"`
@@ -76,7 +78,7 @@ type appPreferences struct {
 }
 
 func defaultAppPreferences() appPreferences {
-	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, NotifyComplete: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
+	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, MinTrayStart: true, MinTrayClose: true, NotifyComplete: false, NotifyApp: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
 }
 
 var connectionOptions = [...]int{-1, 1, 4, 8, 16, 32}
@@ -153,6 +155,9 @@ func validFileType(name string) bool {
 func (p *appPreferences) validate() {
 	if p.DragFileAction != "copy" {
 		p.DragFileAction = ""
+	}
+	if p.FileExistsAction != "copy" {
+		p.FileExistsAction = ""
 	}
 	p.Language = i18n.Normalize(p.Language)
 	if p.AccentColor == "" {
@@ -387,6 +392,9 @@ func loadAppPreferences() appPreferences {
 	value := defaultAppPreferences()
 	if path, err := appPreferencesPath(); err == nil {
 		if data, err := os.ReadFile(path); err == nil {
+			// Existing settings retain the defaults used by older releases for
+			// fields absent from their saved configuration.
+			value.MinTrayStart, value.MinTrayClose, value.NotifyComplete = false, false, true
 			if json.Unmarshal(data, &value) != nil {
 				value = defaultAppPreferences()
 			} else {

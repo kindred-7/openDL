@@ -21,6 +21,11 @@
 
   const DOWNLOAD_EXT = globalThis.openDLResourceTypes.downloadable;
   const LINK_EXT = globalThis.openDLResourceTypes.discoverable;
+  let customFormats = new Set(), customFormatRevision = 0;
+  const parseCustomFormats = (value) => new Set(String(value || "").toLowerCase().split(/[\s,;]+/).map((x) => x.replace(/^\./, "")).filter((x) => /^[a-z0-9]{1,16}$/.test(x)).slice(0, 64));
+  const customFormatsReady = chrome.storage.local.get({ "opendl-sniff-formats": "" }).then((stored) => {
+    if (!customFormatRevision) customFormats = parseCustomFormats(stored["opendl-sniff-formats"]);
+  }).catch(() => {});
 
   // A single isolated overlay avoids modifying a site's link or layout.
   let hoverEnabled = false, hoverLink = null, hoverHref = "", hoverTimer = 0, hoverHost = null, hoverControl = null, hoverRevision = 0, hoverSettingRevision = 0;
@@ -263,6 +268,7 @@
   // One deduplicated resource table per frame.
   const resources = new Map();
   const ruleOnlyResources = new Set();
+  const customOnlyResources = new Set();
   let badgeTimer;
   const notifyResourcesChanged = () => {
     if (badgeTimer) return;
@@ -280,13 +286,14 @@
   };
   const add = (url, kind, extra) => {
     if (!url || !/^https?:/i.test(url)) return;
-    const { ruleOnly = false, ...metadata } = extra || {};
+    const { ruleOnly = false, customOnly = false, ...metadata } = extra || {};
     const key = url;
     if (resources.has(key)) {
       // A media element may be seen before an anchor for the same URL.
       // Keep the stronger media classification while retaining its filename.
       const existing = resources.get(key);
       if (!ruleOnly) ruleOnlyResources.delete(key);
+      if (!customOnly) customOnlyResources.delete(key);
       if (metadata.downloadAttr && !existing.downloadAttr) existing.downloadAttr = metadata.downloadAttr;
       if (metadata.text && !existing.text) existing.text = metadata.text;
       if (metadata.player && !existing.player) existing.player = true;
@@ -311,6 +318,7 @@
     );
     resources.set(key, item);
     if (ruleOnly) ruleOnlyResources.add(key);
+    if (customOnly) customOnlyResources.add(key);
     notifyResourcesChanged();
   };
 
@@ -326,12 +334,12 @@
       // recognized extension, while preserving spaces within that filename.
       for (;;) {
         const suffix = / [^\s/]+$/.exec(u);
-        if (!suffix || !LINK_EXT.has(extOf(u.slice(0, suffix.index)))) break;
+        if (!suffix || !(LINK_EXT.has(extOf(u.slice(0, suffix.index))) || customFormats.has(extOf(u.slice(0, suffix.index))))) break;
         u = u.slice(0, suffix.index);
       }
       const ext = extOf(u);
       const rule = matchSiteRule(u);
-      if (LINK_EXT.has(ext) || rule) add(u, "link", { via: "text", ruleOnly: !LINK_EXT.has(ext) });
+      if (LINK_EXT.has(ext) || customFormats.has(ext) || rule) add(u, "link", { via: "text", ruleOnly: !LINK_EXT.has(ext) && !customFormats.has(ext), customOnly: !LINK_EXT.has(ext) && customFormats.has(ext) && !rule });
     }
   };
 
@@ -357,11 +365,12 @@
     for (const a of matching("a[href]")) {
       const ext = extOf(a.href);
       const rule = matchSiteRule(a.href);
-      if (LINK_EXT.has(ext) || rule || a.hasAttribute("download")) {
+      if (LINK_EXT.has(ext) || customFormats.has(ext) || rule || a.hasAttribute("download")) {
         add(a.href, "link", {
           text: (a.innerText || a.title || "").trim().slice(0, 120),
           downloadAttr: a.getAttribute("download") || "",
-          ruleOnly: !LINK_EXT.has(ext) && !a.hasAttribute("download"),
+          ruleOnly: !LINK_EXT.has(ext) && !customFormats.has(ext) && !a.hasAttribute("download"),
+          customOnly: !LINK_EXT.has(ext) && customFormats.has(ext) && !rule && !a.hasAttribute("download"),
           ...(rule?.ext && !ext ? { ext: rule.ext } : {})
         });
       }
@@ -372,7 +381,8 @@
         if (!candidate) continue;
         try {
           const url = new URL(candidate, document.baseURI).href;
-          if (DOWNLOAD_EXT.has(extOf(url))) add(url, "srcset");
+          const ext = extOf(url);
+          if (DOWNLOAD_EXT.has(ext) || customFormats.has(ext)) add(url, "srcset", { customOnly: !DOWNLOAD_EXT.has(ext) });
         } catch {}
       }
     }
@@ -382,9 +392,10 @@
   const addPerformanceEntry = (e) => {
     const ext = extOf(e.name);
     const rule = matchSiteRule(e.name);
-    if (DOWNLOAD_EXT.has(ext) || rule || e.initiatorType === "media" || e.initiatorType === "video") {
+    if (DOWNLOAD_EXT.has(ext) || customFormats.has(ext) || rule || e.initiatorType === "media" || e.initiatorType === "video") {
       add(e.name, "network:" + e.initiatorType, {
-        ruleOnly: !DOWNLOAD_EXT.has(ext) && e.initiatorType !== "media" && e.initiatorType !== "video",
+        ruleOnly: !DOWNLOAD_EXT.has(ext) && !customFormats.has(ext) && e.initiatorType !== "media" && e.initiatorType !== "video",
+        customOnly: !DOWNLOAD_EXT.has(ext) && customFormats.has(ext) && !rule && e.initiatorType !== "media" && e.initiatorType !== "video",
         ...(rule?.ext && !ext ? { ext: rule.ext } : {})
       });
     }
@@ -554,8 +565,8 @@
       return;
     }
     const ext = extOf(url);
-    if (DOWNLOAD_EXT.has(ext)) {
-      add(url, tag || (via === "media" || via === "media-blob" ? "network:media" : "link"), extra);
+    if (DOWNLOAD_EXT.has(ext) || customFormats.has(ext)) {
+      add(url, tag || (via === "media" || via === "media-blob" ? "network:media" : "link"), { ...extra, customOnly: !DOWNLOAD_EXT.has(ext) && !tag && via !== "media" && via !== "media-blob" });
     }
   };
 
@@ -599,6 +610,17 @@
   requestPageLog();
   refreshSiteRules(false);
 
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes["opendl-sniff-formats"]) return;
+    customFormatRevision++;
+    customFormats = parseCustomFormats(changes["opendl-sniff-formats"].newValue);
+    for (const url of customOnlyResources) { resources.delete(url); ruleOnlyResources.delete(url); }
+    customOnlyResources.clear();
+    fullScan();
+    void requestPageLog();
+    notifyResourcesChanged();
+  });
+
   // popup/background queries. "download" only confirms the URL is on this
   // page; the actual transfer goes through the service worker to the host.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -607,7 +629,7 @@
       return false;
     }
     if (msg.type === "getResources") {
-      refreshSiteRules(false).then(() => {
+      Promise.all([customFormatsReady, refreshSiteRules(false)]).then(() => {
         fullScan();
         return requestPageLog();
       }).then(() =>
@@ -616,7 +638,7 @@
       return true;
     }
     if (msg.type === "rescan") {
-      refreshSiteRules(true).then((rulesFresh) => {
+      Promise.all([customFormatsReady, refreshSiteRules(true)]).then(([, rulesFresh]) => {
         if (rulesFresh && ruleOnlyResources.size) {
           for (const url of ruleOnlyResources) resources.delete(url);
           ruleOnlyResources.clear();

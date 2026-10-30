@@ -250,6 +250,8 @@ func (m *Manager) finishFileWithPrior(t *Task, part, priorHash string, priorSize
 				return err
 			}
 			err = replaceSyncedFile(part, destination)
+		} else if m.overwriteExisting.Load() {
+			err = replaceSyncedFile(part, destination)
 		} else {
 			err = publishFile(part, destination)
 		}
@@ -263,8 +265,9 @@ func (m *Manager) finishFileWithPrior(t *Task, part, priorHash string, priorSize
 			return err
 		}
 		// A target created after the original name was claimed must never be
-		// overwritten, and waiting cannot make that collision safe.
-		if _, statErr := os.Lstat(destination); original == "" && (statErr == nil || !os.IsNotExist(statErr)) {
+		// overwritten, and waiting cannot make that collision safe. Overwrite
+		// mode replaces an existing destination on purpose.
+		if _, statErr := os.Lstat(destination); original == "" && !m.overwriteExisting.Load() && (statErr == nil || !os.IsNotExist(statErr)) {
 			return err
 		}
 		if err := waitRetry(t.cancel, time.Duration(250*(1<<attempt))*time.Millisecond); err != nil {

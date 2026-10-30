@@ -101,13 +101,16 @@ func d1MenuRow(c *ui.Context, p *d1Palette, label string, enabled bool, keys ...
 	return item
 }
 
-func d1DropdownItem(c *ui.Context, p *d1Palette, label, icon string, enabled bool) ui.Element {
+func d1DropdownItem(c *ui.Context, p *d1Palette, label, icon string, enabled bool, shortcut ...string) ui.Element {
 	item := d1MenuRow(c, p, label, enabled)
 	item.Children(func() {
 		if icon != "" {
 			d1Icon(c, icon, 16, p.mu)
 		}
-		ui.Text(c, tr(label)).Grow(1).Shrink(1).Basis(0).FontSize(style.TextBase).TextColor(p.fg).SingleLine()
+		ui.Text(c, tr(label)).Grow(1).Shrink(1).Basis(0).FontSize(style.TextBase).TextColor(p.fg).SingleLine().Tooltip(tr(label))
+		if len(shortcut) > 0 && shortcut[0] != "" {
+			ui.Text(c, shortcut[0]).Shrink(0).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
+		}
 	})
 	return item
 }

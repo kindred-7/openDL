@@ -26,12 +26,13 @@ const appBrand = "OpenDL"
 
 // app holds the dashboard state. The UI lives in dashboard.go.
 type app struct {
-	mgr     *download.Manager
-	query   string
-	input   string
-	status  string
-	saveDir string
-	dark    bool
+	mgr       *download.Manager
+	query     string
+	input     string
+	status    string
+	copyUntil time.Time
+	saveDir   string
+	dark      bool
 
 	showAdd    bool
 	showDetail bool
@@ -96,7 +97,14 @@ func (a *app) view(c *ui.Context) {
 				a.tabRow(c, p, snaps)
 				a.tableCard(c, p, cols, snaps)
 				a.queueCard(c, p, snaps)
-				ui.Text(c, tr(a.status)).SingleLine().FontSize(11).TextColor(p.TextFaint).AlignSelf(ui.End)
+				if remaining := time.Until(a.copyUntil); remaining > 0 {
+					c.After(remaining)
+					indicator := ui.Box(c).AlignSelf(ui.End).Role(ui.RoleStatus).Label(tr("已复制到剪贴板"))
+					progress := indicator.Animate("copy-status", 1, 160*time.Millisecond)
+					indicator.Children(func() { style.Icon(c, style.IconCheck, 16, p.TextFaint).Scale(0.9+0.1*progress, 0.9+0.1*progress) })
+				} else {
+					ui.Text(c, tr(a.status)).SingleLine().FontSize(11).TextColor(p.TextFaint).AlignSelf(ui.End)
+				}
 			})
 			a.detailPanel(c, p, snaps)
 		})
@@ -796,6 +804,11 @@ func main() {
 	if err := style.RegisterFonts(); err != nil {
 		log.Printf("register fonts: %v", err)
 	}
+	firstRun := false
+	if path, err := appPreferencesPath(); err == nil {
+		_, statErr := os.Stat(path)
+		firstRun = os.IsNotExist(statErr)
+	}
 	preferences := loadAppPreferences()
 	i18n.Set(preferences.Language)
 	dir := preferences.Directory
@@ -804,6 +817,7 @@ func main() {
 	mgr.SetRateLimit(int64(preferences.RateMBps * float64(1<<20)))
 	mgr.SetMaxConnections(preferences.MaxConnections)
 	mgr.SetAllowUnverifiedResume(preferences.AllowUnverifiedResume)
+	mgr.SetOverwriteExisting(preferences.FileExistsAction != "copy")
 	proxyPassword, proxyErr := initializeDownloadProxy(mgr, preferences)
 	setSiteRulesSource(preferences.SiteRulesURL)
 	if proxyErr != nil {
@@ -899,6 +913,11 @@ func main() {
 	themeMode := loadThemeMode()
 	var mainWindowPage *mainPage
 	mygo.App.WhenReady(func() {
+		if firstRun {
+			if err := mygo.App.SetOpenAtLogin(true); err != nil {
+				log.Printf("无法启用开机自动启动: %v", err)
+			}
+		}
 		applyNativeThemeMode(themeMode)
 		dark := mygo.Theme.IsDark()
 		// 启动时最小化到托盘：窗口以隐藏状态创建，由托盘入口唤回。
@@ -954,6 +973,9 @@ func main() {
 		}
 		// 窗口事件与后台工作在窗口创建后立即绑定，不等首次视图构建。
 		pg.startWindow()
+		if firstRun {
+			pg.saveAppPreferences()
+		}
 		go func() {
 			for {
 				select {

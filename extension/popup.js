@@ -140,6 +140,49 @@ takeoverOption.addEventListener("change", async () => {
   }
 });
 
+const sniffFormats = document.getElementById("sniff-formats");
+const sniffStatus = document.getElementById("sniff-formats-status");
+const sniffSave = document.getElementById("sniff-formats-save");
+const sniffRetry = document.getElementById("sniff-formats-retry");
+async function loadSniffFormats() {
+  sniffRetry.disabled = true;
+  delete sniffStatus.dataset.state;
+  try {
+    const stored = await chrome.storage.local.get({ "opendl-sniff-formats": "" });
+    sniffFormats.value = String(stored["opendl-sniff-formats"] || "");
+    sniffFormats.disabled = false;
+    sniffSave.disabled = false;
+    sniffStatus.textContent = "";
+    sniffRetry.classList.add("hidden");
+  } catch {
+    sniffStatus.textContent = localize("无法读取嗅探格式");
+    sniffRetry.classList.remove("hidden");
+  } finally { sniffRetry.disabled = false; }
+}
+sniffRetry.addEventListener("click", loadSniffFormats);
+sniffFormats.addEventListener("input", () => { delete sniffStatus.dataset.state; sniffStatus.textContent = ""; sniffFormats.removeAttribute("aria-invalid"); });
+sniffSave.addEventListener("click", async () => {
+  delete sniffStatus.dataset.state;
+  const formats = [...new Set(sniffFormats.value.toLowerCase().split(/[\s,;，；]+/).map((x) => x.replace(/^\./, "")).filter(Boolean))];
+  if (formats.length > 64 || formats.some((x) => !/^[a-z0-9]{1,16}$/.test(x))) {
+    sniffFormats.setAttribute("aria-invalid", "true");
+    sniffStatus.textContent = localize("请输入有效的文件扩展名，最多 64 个");
+    return;
+  }
+  sniffSave.disabled = true;
+  try {
+    const value = formats.join(", ");
+    await chrome.storage.local.set({ "opendl-sniff-formats": value });
+    sniffFormats.value = value;
+    sniffFormats.removeAttribute("aria-invalid");
+    sniffStatus.dataset.state = "success";
+    sniffStatus.textContent = localize("已保存，请重新扫描页面资源");
+  } catch {
+    sniffStatus.textContent = localize("无法保存嗅探格式，请重试");
+  } finally { sniffSave.disabled = false; }
+});
+loadSniffFormats();
+
 const inlineFormats = document.getElementById("inline-formats");
 const inlineStatus = document.getElementById("inline-formats-status");
 const inlineRetry = document.getElementById("inline-formats-retry");
@@ -557,10 +600,18 @@ function row(item) {
   copy.textContent = localize("复制链接");
   copy.setAttribute("aria-label", localize("复制链接"));
   copy.title = localize("复制链接");
+  let copyFeedbackTimer;
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(item.url);
-      statusEl.textContent = localize("链接已复制");
+      if (statusEl.textContent === localize("无法复制链接")) statusEl.textContent = "";
+      copy.dataset.copied = "true";
+      copy.setAttribute("aria-label", localize("链接已复制"));
+      clearTimeout(copyFeedbackTimer);
+      copyFeedbackTimer = setTimeout(() => {
+        delete copy.dataset.copied;
+        copy.setAttribute("aria-label", localize("复制链接"));
+      }, 1600);
     } catch { statusEl.textContent = localize("无法复制链接"); }
   });
   div.appendChild(copy);

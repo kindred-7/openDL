@@ -349,6 +349,7 @@ type Manager struct {
 	retryUntil            map[string]time.Time
 	bodyIdleTimeout       time.Duration
 	allowUnverifiedResume atomic.Bool
+	overwriteExisting     atomic.Bool
 
 	pace              paceLimiter
 	quota             trafficQuota
@@ -725,6 +726,9 @@ func (m *Manager) MaxConnections() int { return m.limiter.getLimit() }
 // SetAllowUnverifiedResume permits reuse of ordinary HTTP chunks when a
 // refreshed resource cannot be identified. It does not disable SHA-256 checks.
 func (m *Manager) SetAllowUnverifiedResume(allow bool) { m.allowUnverifiedResume.Store(allow) }
+
+// SetOverwriteExisting 让下载替换目标目录中的同名文件，而不是创建带编号的副本。
+func (m *Manager) SetOverwriteExisting(overwrite bool) { m.overwriteExisting.Store(overwrite) }
 
 // NewManager creates a manager saving into dir with at most parallel tasks
 // and conns connections each.
@@ -1538,7 +1542,7 @@ func (m *Manager) download(t *Task) error {
 	t.metaMu.Unlock()
 	part := filePath + ".part"
 	if filePath == "" {
-		filePath, part, err = claimPath(t.directory, name)
+		filePath, part, err = claimPath(t.directory, name, m.overwriteExisting.Load())
 		if err != nil {
 			return err
 		}
@@ -2584,8 +2588,9 @@ func newID() string {
 }
 
 // claimPath keeps two same-named downloads apart by creating the .part file
-// exclusively: concurrent tasks cannot claim the same name.
-func claimPath(dir, name string) (filePath, part string, err error) {
+// exclusively: concurrent tasks cannot claim the same name. Overwrite mode
+// keeps the plain name even when the destination already exists.
+func claimPath(dir, name string, overwrite bool) (filePath, part string, err error) {
 	base := name
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
@@ -2598,6 +2603,9 @@ func claimPath(dir, name string) (filePath, part string, err error) {
 				return "", "", e
 			}
 			if _, e = os.Lstat(extendedPath(p)); e == nil {
+				if overwrite {
+					return p, p + ".part", nil
+				}
 				if e = os.Remove(extendedPath(p + ".part")); e != nil {
 					return "", "", e
 				}

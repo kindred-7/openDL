@@ -1,4 +1,13 @@
 {
+  "m_sniff_formats": { "message": "自定义嗅探格式" },
+  "m_sniff_formats_placeholder": { "message": "例如：mobi, epub, psd" },
+  "m_sniff_formats_hint": { "message": "在默认格式之外添加扩展名，以逗号或空格分隔；不影响浏览器下载接管。" },
+  "m_sniff_formats_save": { "message": "保存嗅探格式" },
+  "m_sniff_formats_retry": { "message": "重试读取嗅探设置" },
+  "m_sniff_formats_read_failed": { "message": "无法读取嗅探格式" },
+  "m_sniff_formats_invalid": { "message": "请输入有效的文件扩展名，最多 64 个" },
+  "m_sniff_formats_saved": { "message": "已保存，请重新扫描页面资源" },
+  "m_sniff_formats_save_failed": { "message": "无法保存嗅探格式，请重试" },
   "m_context_download": { "message": "使用 OpenDL 下载" },
   "m_context_http_only": { "message": "仅支持 HTTP 和 HTTPS 链接" },
   "m_hover_failed": { "message": "发送失败，请检查桌面端连接" },
