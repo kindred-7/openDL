@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "__MSG_m_052732853cd8e6c7__",
-  "version": "0.1.0",
+  "version": "0.1.4",
   "icons": {
     "16": "icon.png",
     "32": "icon.png",

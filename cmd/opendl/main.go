@@ -803,6 +803,7 @@ func main() {
 	mgr.SetMediaMuxProgram(preferences.MediaMuxProgram)
 	mgr.SetRateLimit(int64(preferences.RateMBps * float64(1<<20)))
 	mgr.SetMaxConnections(preferences.MaxConnections)
+	mgr.SetAllowUnverifiedResume(preferences.AllowUnverifiedResume)
 	proxyPassword, proxyErr := initializeDownloadProxy(mgr, preferences)
 	setSiteRulesSource(preferences.SiteRulesURL)
 	if proxyErr != nil {

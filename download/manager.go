@@ -171,6 +171,8 @@ type Task struct {
 	resumeTotal          int64
 	resumeValidator      string
 	resumeResource       string // SHA-256 of the final URL, not the signed URL itself
+	resumeStableResource string // GitHub release asset identity without temporary query parameters
+	resumeUnverified     bool   // retained chunks were matched without proving resource identity
 	hlsPlaylist          string // fingerprint of the selected playlist's resolved segments
 	hlsFormat            string // empty for legacy TS; fmp4 permits non-188-byte checkpoints
 	hlsCompleted         []hlsCheckpoint
@@ -331,21 +333,22 @@ func (t *Task) setErr(err error) {
 
 // Manager owns the task queue and the worker pool.
 type Manager struct {
-	mu              sync.Mutex
-	tasks           []*Task
-	dir             string
-	concurrency     int
-	conns           int // default connections per task
-	onChange        func()
-	client          *http.Client
-	proxy           *proxyTransport
-	waiting         []*queueTicket
-	active          int
-	storeDir        string     // configured before tasks are added
-	submissionMu    sync.Mutex // serialize durable API submissions and duplicate checks
-	retryMu         sync.Mutex
-	retryUntil      map[string]time.Time
-	bodyIdleTimeout time.Duration
+	mu                    sync.Mutex
+	tasks                 []*Task
+	dir                   string
+	concurrency           int
+	conns                 int // default connections per task
+	onChange              func()
+	client                *http.Client
+	proxy                 *proxyTransport
+	waiting               []*queueTicket
+	active                int
+	storeDir              string     // configured before tasks are added
+	submissionMu          sync.Mutex // serialize durable API submissions and duplicate checks
+	retryMu               sync.Mutex
+	retryUntil            map[string]time.Time
+	bodyIdleTimeout       time.Duration
+	allowUnverifiedResume atomic.Bool
 
 	pace              paceLimiter
 	quota             trafficQuota
@@ -718,6 +721,10 @@ func (m *Manager) SetMaxConnections(n int) { m.limiter.setLimit(n) }
 
 // MaxConnections reports the global transfer cap, zero when unlimited.
 func (m *Manager) MaxConnections() int { return m.limiter.getLimit() }
+
+// SetAllowUnverifiedResume permits reuse of ordinary HTTP chunks when a
+// refreshed resource cannot be identified. It does not disable SHA-256 checks.
+func (m *Manager) SetAllowUnverifiedResume(allow bool) { m.allowUnverifiedResume.Store(allow) }
 
 // NewManager creates a manager saving into dir with at most parallel tasks
 // and conns connections each.
@@ -1542,7 +1549,7 @@ func (m *Manager) download(t *Task) error {
 
 	total := resp.ContentLength
 	t.total.Store(total)
-	t.resumeSafe.Store(total >= 256<<10 && t.rangeSupport.Load() == 2 && validator != "")
+	t.resumeSafe.Store(total >= 256<<10 && t.rangeSupport.Load() == 2 && (validator != "" || expected != ""))
 
 	// Single stream transfer; the multi-connection split below takes over
 	// when the server supports ranges and the size is known.
@@ -1555,25 +1562,51 @@ func (m *Manager) download(t *Task) error {
 	if err := m.prepareOutputLimit(t, out, total); err != nil {
 		return err
 	}
-	if total >= 256<<10 && t.rangeSupport.Load() != 1 && (validator != "" || expected != "") {
+	allowUnverified := expected == "" && m.allowUnverifiedResume.Load()
+	if total >= 256<<10 && t.rangeSupport.Load() != 1 && (validator != "" || expected != "" || allowUnverified) {
 		info, statErr := out.Stat()
+		// Keep the exact final request, including the headers retained by the
+		// redirect policy, for this transfer's range requests. Re-resolving the
+		// original URL for every range can produce a different signed URL.
+		var resolvedRequest *http.Request
+		if resp.Request != nil && resp.Request.URL != nil {
+			resolvedRequest = resp.Request.Clone(context.Background())
+		}
 		resp.Body.Close()
 		_ = out.Close()
-		t.checkpointMu.Lock()
 		if resp.Request == nil || resp.Request.URL == nil {
-			t.checkpointMu.Unlock()
 			return fmt.Errorf(i18n.T("无法确认下载文件的最终地址"))
 		}
 		resource := resourceFingerprint(resp.Request.URL)
+		stable := githubReleaseResource(address, resp.Request.URL)
+		t.checkpointMu.Lock()
+		githubCandidate := resource != t.resumeResource && stable != "" && stable == t.resumeStableResource && strings.HasPrefix(validator, `"`) && validator == t.resumeValidator && total == t.resumeTotal && len(t.completed) > 0
+		t.checkpointMu.Unlock()
+		githubVerified := false
+		if githubCandidate && expected == "" && !allowUnverified {
+			var probeErr error
+			githubVerified, probeErr = m.probeGitHubResume(t, resolvedRequest, total, validator)
+			if probeErr != nil {
+				return probeErr
+			}
+		}
+		t.checkpointMu.Lock()
 		t.metaMu.Lock()
 		failedChecksum := t.failedSHA256
 		t.failedSHA256 = ""
 		t.metaMu.Unlock()
 		invalidated := failedChecksum != "" && (expected == failedChecksum || expected == "")
-		if invalidated || validator == "" || validator != t.resumeValidator || total != t.resumeTotal || resource != t.resumeResource || statErr != nil || info.Size() != total {
+		sameResource := validator != "" && validator == t.resumeValidator && resource == t.resumeResource
+		githubRefresh := githubCandidate && githubVerified && stable == t.resumeStableResource && validator == t.resumeValidator && total == t.resumeTotal
+		unverified := !sameResource && !githubRefresh && expected == ""
+		if invalidated || (t.resumeUnverified && expected == "" && !allowUnverified) || (unverified && !allowUnverified) || total != t.resumeTotal || statErr != nil || info.Size() != total {
 			t.completed = nil
 			t.done.Store(0)
+			t.resumeUnverified = false
 		} else {
+			if unverified && len(t.completed) > 0 {
+				t.resumeUnverified = true
+			}
 			var done int64
 			for _, chunk := range t.completed {
 				done += chunk.end - chunk.start + 1
@@ -1581,14 +1614,69 @@ func (m *Manager) download(t *Task) error {
 			t.done.Store(done)
 		}
 		t.resumeTotal, t.resumeValidator, t.resumeResource = total, validator, resource
+		t.resumeStableResource = stable
+		if t.resumeUnverified && expected == "" {
+			t.resumeSafe.Store(false)
+		}
 		err := m.saveTaskLocked(t)
 		t.checkpointMu.Unlock()
 		if err != nil {
 			return fmt.Errorf(i18n.T("无法保存下载记录：%w"), err)
 		}
-		err = m.downloadSplit(t, part, total, validator, func(out *os.File, start, end int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error) {
-			return m.downloadRangeTracked(t, out, start, end, total, validator, segment, splitCtx)
-		})
+		for refreshes := 0; ; refreshes++ {
+			err = m.downloadSplit(t, part, total, validator, func(out *os.File, start, end int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error) {
+				return m.downloadRangeResolved(t, out, start, end, total, validator, segment, splitCtx, resolvedRequest)
+			})
+			if !errors.Is(err, errRangeExpired) || refreshes >= 2 {
+				if errors.Is(err, errRangeExpired) {
+					err = errRangeIgnored
+				}
+				break
+			}
+			fresh, freshCancel, requestErr := t.newRequest(address)
+			if requestErr != nil {
+				return requestErr
+			}
+			fresh.Header.Del("Range")
+			fresh.Header.Del("If-Range")
+			freshResp, requestErr := m.doWithRetry(t, fresh)
+			if requestErr != nil {
+				freshCancel()
+				return requestErr
+			}
+			freshValidator := strongValidator(freshResp.Header)
+			var freshStable, freshResource string
+			if freshResp.Request != nil && freshResp.Request.URL != nil {
+				freshResource = resourceFingerprint(freshResp.Request.URL)
+				freshStable = githubReleaseResource(address, freshResp.Request.URL)
+			}
+			same := freshResource != "" && validator != "" && freshValidator == validator && freshResource == resource
+			githubSame := stable != "" && freshStable == stable && strings.HasPrefix(validator, `"`) && freshValidator == validator
+			encoding := freshResp.Header.Get("Content-Encoding")
+			if freshResp.StatusCode != http.StatusOK || freshResp.ContentLength != total || (encoding != "" && !strings.EqualFold(encoding, "identity")) || (!same && !githubSame && expected == "" && !allowUnverified) || freshResource == "" {
+				freshResp.Body.Close()
+				freshCancel()
+				err = errRangeIgnored
+				break
+			}
+			resolvedRequest = freshResp.Request.Clone(context.Background())
+			freshResp.Body.Close()
+			freshCancel()
+			validator, resource, stable = freshValidator, freshResource, freshStable
+			t.checkpointMu.Lock()
+			if !same && !githubSame && expected == "" && len(t.completed) > 0 {
+				t.resumeUnverified = true
+			}
+			if t.resumeUnverified && expected == "" {
+				t.resumeSafe.Store(false)
+			}
+			t.resumeValidator, t.resumeResource, t.resumeStableResource = validator, resource, stable
+			requestErr = m.saveTaskLocked(t)
+			t.checkpointMu.Unlock()
+			if requestErr != nil {
+				return fmt.Errorf(i18n.T("无法保存下载记录：%w"), requestErr)
+			}
+		}
 		if !errors.Is(err, errRangeIgnored) {
 			return err
 		}
@@ -1641,6 +1729,7 @@ func (m *Manager) downloadSingle(t *Task, part string, resp *http.Response, canc
 	t.checkpointMu.Lock()
 	t.completed = nil
 	t.resumeTotal, t.resumeValidator, t.resumeResource = 0, "", ""
+	t.resumeStableResource, t.resumeUnverified = "", false
 	err = m.saveTaskLocked(t)
 	t.checkpointMu.Unlock()
 	if err != nil {
@@ -2191,10 +2280,6 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator str
 	return m.finishFile(t, part)
 }
 
-func (m *Manager) downloadRange(t *Task, out *os.File, start, end, total int64, validator string) (int64, error) {
-	return m.downloadRangeTracked(t, out, start, end, total, validator, nil, nil)
-}
-
 func resourceFingerprint(u *url.URL) string {
 	if u == nil {
 		return ""
@@ -2203,10 +2288,65 @@ func resourceFingerprint(u *url.URL) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (m *Manager) downloadRangeTracked(t *Task, out *os.File, start, end, total int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error) {
-	req, cancelReq, err := t.newRequest(t.sourceURL())
+// githubReleaseResource excludes only the expiring query of GitHub's known
+// release asset endpoint. The hash never persists the signed URL itself.
+func githubReleaseResource(source string, final *url.URL) string {
+	original, err := url.Parse(source)
+	if err != nil || original.User != nil || original.Scheme != "https" || !strings.EqualFold(original.Host, "github.com") || !strings.Contains(original.EscapedPath(), "/releases/download/") || final == nil || final.User != nil || final.Scheme != "https" || !strings.EqualFold(final.Host, "release-assets.githubusercontent.com") || !strings.HasPrefix(final.EscapedPath(), "/github-production-release-asset/") {
+		return ""
+	}
+	canonical := *final
+	canonical.RawQuery, canonical.ForceQuery, canonical.Fragment = "", false, ""
+	return resourceFingerprint(&canonical)
+}
+
+// probeGitHubResume checks that a refreshed signed URL still serves the same
+// strong-ETag representation before reusing previously persisted chunks.
+func (m *Manager) probeGitHubResume(t *Task, resolved *http.Request, total int64, validator string) (bool, error) {
+	if resolved == nil || resolved.URL == nil {
+		return false, nil
+	}
+	req, cancel, err := t.newRequest(resolved.URL.String())
+	if err != nil {
+		return false, err
+	}
+	defer cancel()
+	req.Header = resolved.Header.Clone()
+	req.Header.Set("Range", "bytes=0-0")
+	req.Header.Set("If-Range", validator)
+	resp, err := m.doWithRetry(t, req)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || resp.Request == nil || resourceFingerprint(resp.Request.URL) != resourceFingerprint(resolved.URL) || resp.Header.Get("ETag") != validator || resp.Header.Get("Content-Range") != fmt.Sprintf("bytes 0-0/%d", total) || (resp.ContentLength >= 0 && resp.ContentLength != 1) {
+		return false, nil
+	}
+	encoding := resp.Header.Get("Content-Encoding")
+	if encoding != "" && !strings.EqualFold(encoding, "identity") {
+		return false, nil
+	}
+	body, err := io.ReadAll(io.LimitReader(idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}, 2))
+	if err != nil {
+		return false, err
+	}
+	return len(body) == 1, nil
+}
+
+// downloadRangeResolved reuses only headers already allowed on the resolved
+// request. In particular, it must not copy the original source's credentials
+// onto a different redirect origin.
+func (m *Manager) downloadRangeResolved(t *Task, out *os.File, start, end, total int64, validator string, segment *segmentProgress, splitCtx context.Context, resolved *http.Request) (int64, error) {
+	address := t.sourceURL()
+	if resolved != nil && resolved.URL != nil {
+		address = resolved.URL.String()
+	}
+	req, cancelReq, err := t.newRequest(address)
 	if err != nil {
 		return 0, err
+	}
+	if resolved != nil && resolved.URL != nil {
+		req.Header = resolved.Header.Clone()
 	}
 	defer cancelReq()
 	if splitCtx != nil {
@@ -2223,6 +2363,9 @@ func (m *Manager) downloadRangeTracked(t *Task, out *os.File, start, end, total 
 	if err != nil {
 		var status *httpStatusError
 		if errors.As(err, &status) {
+			if status.code == http.StatusForbidden && resolved != nil && resolved.URL != nil && resolved.URL.String() != t.sourceURL() {
+				return 0, errRangeExpired
+			}
 			switch status.code {
 			case http.StatusBadRequest, http.StatusForbidden, http.StatusMethodNotAllowed,
 				http.StatusPreconditionFailed, http.StatusRequestedRangeNotSatisfiable, http.StatusNotImplemented:
@@ -2255,8 +2398,20 @@ func (m *Manager) downloadRangeTracked(t *Task, out *os.File, start, end, total 
 		t.metaMu.Lock()
 		hasExpectedChecksum := t.expectedSHA256 != ""
 		t.metaMu.Unlock()
-		if !hasExpectedChecksum {
+		if !hasExpectedChecksum && !m.allowUnverifiedResume.Load() {
 			return 0, errRangeIgnored
+		}
+		if !hasExpectedChecksum {
+			t.checkpointMu.Lock()
+			if !t.resumeUnverified {
+				t.resumeUnverified = true
+				if err := m.saveTaskLocked(t); err != nil {
+					t.checkpointMu.Unlock()
+					return 0, fmt.Errorf(i18n.T("无法保存下载记录：%w"), err)
+				}
+			}
+			t.checkpointMu.Unlock()
+			t.resumeSafe.Store(false)
 		}
 	}
 	expected := fmt.Sprintf("bytes %d-%d/%d", start, end, total)
@@ -2268,7 +2423,7 @@ func (m *Manager) downloadRangeTracked(t *Task, out *os.File, start, end, total 
 		if strings.HasPrefix(validator, `"`) {
 			header = "ETag"
 		}
-		if actual := resp.Header.Get(header); actual != "" && actual != validator {
+		if actual := resp.Header.Get(header); actual != validator && (actual != "" || (resolved != nil && githubReleaseResource(t.sourceURL(), resolved.URL) != "")) {
 			return 0, fmt.Errorf(i18n.T("下载期间服务器文件已改变"))
 		}
 	}
@@ -2281,7 +2436,13 @@ func (m *Manager) downloadRangeTracked(t *Task, out *os.File, start, end, total 
 	}
 	// A valid 206 confirms range support even without Accept-Ranges.
 	t.rangeSupport.Store(2)
-	if validator != "" {
+	t.metaMu.Lock()
+	hasExpectedChecksum := t.expectedSHA256 != ""
+	t.metaMu.Unlock()
+	t.checkpointMu.Lock()
+	unverified := t.resumeUnverified
+	t.checkpointMu.Unlock()
+	if (validator != "" || hasExpectedChecksum) && (!unverified || hasExpectedChecksum) {
 		t.resumeSafe.Store(true)
 	}
 	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancelReq}
@@ -2410,6 +2571,7 @@ func (m *Manager) sampleSpeed(t *Task, stop <-chan struct{}, done chan<- struct{
 var contextCanceled = errCanceled("canceled")
 
 var errRangeIgnored = i18n.NewError("服务器忽略分段请求")
+var errRangeExpired = errors.New("resolved download URL expired or was rejected")
 
 type errCanceled string
 

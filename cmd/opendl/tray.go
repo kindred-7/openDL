@@ -52,7 +52,7 @@ func (pg *mainPage) trayStatusWatch() {
 	defer t.Stop()
 	for {
 		if pg.win != nil {
-			pg.win.Update(func() {
+			mygo.RunOnMain(func() {
 				tray := pg.tray
 				if tray == nil {
 					return

@@ -13,6 +13,7 @@ package main
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"net/url"
 	"os"
@@ -2900,7 +2901,7 @@ func (pg *mainPage) clipboardWatch() {
 			return
 		case <-t.C:
 		}
-		pg.win.Update(func() {
+		mygo.RunOnMain(func() {
 			if !pg.clipOn || pg.svc == nil {
 				return
 			}
@@ -2920,6 +2921,7 @@ func (pg *mainPage) clipboardWatch() {
 			}
 			pg.dlgLinks = strings.Join(links, "\n")
 			pg.openAdd(false)
+			pg.win.Invalidate()
 		})
 	}
 }
@@ -2988,7 +2990,7 @@ func (pg *mainPage) fileStateWatch() {
 				}
 			}
 		}
-		pg.win.Update(func() {
+		mygo.RunOnMain(func() {
 			// Ignore stale results if a task was removed or its path changed.
 			current := map[string]bool{}
 			for _, snapshot := range pg.mgr.Snapshots() {
@@ -2996,7 +2998,10 @@ func (pg *mainPage) fileStateWatch() {
 					current[snapshot.ID] = true
 				}
 			}
-			pg.fileMissing = current
+			if !maps.Equal(pg.fileMissing, current) {
+				pg.fileMissing = current
+				pg.win.Invalidate()
+			}
 		})
 		select {
 		case <-pg.stop:

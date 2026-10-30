@@ -21,40 +21,42 @@ import (
 // Each task has its own journal. Credentials are deliberately not written;
 // a browser-authenticated download may need a fresh link/session after restart.
 type storedTask struct {
-	Version             int                    `json:"version"`
-	ID                  string                 `json:"id"`
-	Request             Request                `json:"request"`
-	State               State                  `json:"state"`
-	Held                bool                   `json:"held,omitempty"`
-	FilePath            string                 `json:"file_path,omitempty"`
-	Created             time.Time              `json:"created"`
-	Finished            time.Time              `json:"finished,omitempty"`
-	Elapsed             time.Duration          `json:"elapsed,omitempty"`
-	BrowserOrigin       bool                   `json:"browser_origin,omitempty"`
-	NightSince          time.Time              `json:"night_since,omitempty"`
-	Total               int64                  `json:"total"`
-	Validator           string                 `json:"validator,omitempty"`
-	ResourceFingerprint string                 `json:"resource_fingerprint,omitempty"`
-	Chunks              []storedChunk          `json:"chunks,omitempty"`
-	HLSPlaylist         string                 `json:"hls_playlist,omitempty"`
-	HLSFormat           string                 `json:"hls_format,omitempty"`
-	HLSCompleted        []hlsCheckpoint        `json:"hls_completed,omitempty"`
-	HLSSplice           *dashSpliceState       `json:"hls_splice,omitempty"`
-	DASHVideo           dashTrackCheckpoint    `json:"dash_video,omitempty"`
-	DASHAudio           dashTrackCheckpoint    `json:"dash_audio,omitempty"`
-	DASHPeriods         []dashPeriodCheckpoint `json:"dash_periods,omitempty"`
-	Error               string                 `json:"error,omitempty"`
-	CredentialsOmitted  bool                   `json:"credentials_omitted,omitempty"`
-	VerifiedSHA256      string                 `json:"verified_sha256,omitempty"`
-	SignatureVerified   bool                   `json:"signature_verified,omitempty"`
-	RemoteValidator     string                 `json:"remote_validator,omitempty"`
-	RemoteResource      string                 `json:"remote_resource,omitempty"`
-	SyncOriginalSHA256  string                 `json:"sync_original_sha256,omitempty"`
-	FailedSHA256        string                 `json:"failed_sha256,omitempty"`
-	PublishSHA256       string                 `json:"publish_sha256,omitempty"`
-	PublishSize         int64                  `json:"publish_size,omitempty"`
-	ClientRequestID     string                 `json:"client_request_id,omitempty"`
-	SubmissionSHA256    string                 `json:"submission_sha256,omitempty"`
+	Version                   int                    `json:"version"`
+	ID                        string                 `json:"id"`
+	Request                   Request                `json:"request"`
+	State                     State                  `json:"state"`
+	Held                      bool                   `json:"held,omitempty"`
+	FilePath                  string                 `json:"file_path,omitempty"`
+	Created                   time.Time              `json:"created"`
+	Finished                  time.Time              `json:"finished,omitempty"`
+	Elapsed                   time.Duration          `json:"elapsed,omitempty"`
+	BrowserOrigin             bool                   `json:"browser_origin,omitempty"`
+	NightSince                time.Time              `json:"night_since,omitempty"`
+	Total                     int64                  `json:"total"`
+	Validator                 string                 `json:"validator,omitempty"`
+	ResourceFingerprint       string                 `json:"resource_fingerprint,omitempty"`
+	StableResourceFingerprint string                 `json:"stable_resource_fingerprint,omitempty"`
+	UnverifiedChunks          bool                   `json:"unverified_chunks,omitempty"`
+	Chunks                    []storedChunk          `json:"chunks,omitempty"`
+	HLSPlaylist               string                 `json:"hls_playlist,omitempty"`
+	HLSFormat                 string                 `json:"hls_format,omitempty"`
+	HLSCompleted              []hlsCheckpoint        `json:"hls_completed,omitempty"`
+	HLSSplice                 *dashSpliceState       `json:"hls_splice,omitempty"`
+	DASHVideo                 dashTrackCheckpoint    `json:"dash_video,omitempty"`
+	DASHAudio                 dashTrackCheckpoint    `json:"dash_audio,omitempty"`
+	DASHPeriods               []dashPeriodCheckpoint `json:"dash_periods,omitempty"`
+	Error                     string                 `json:"error,omitempty"`
+	CredentialsOmitted        bool                   `json:"credentials_omitted,omitempty"`
+	VerifiedSHA256            string                 `json:"verified_sha256,omitempty"`
+	SignatureVerified         bool                   `json:"signature_verified,omitempty"`
+	RemoteValidator           string                 `json:"remote_validator,omitempty"`
+	RemoteResource            string                 `json:"remote_resource,omitempty"`
+	SyncOriginalSHA256        string                 `json:"sync_original_sha256,omitempty"`
+	FailedSHA256              string                 `json:"failed_sha256,omitempty"`
+	PublishSHA256             string                 `json:"publish_sha256,omitempty"`
+	PublishSize               int64                  `json:"publish_size,omitempty"`
+	ClientRequestID           string                 `json:"client_request_id,omitempty"`
+	SubmissionSHA256          string                 `json:"submission_sha256,omitempty"`
 }
 
 type storedChunk struct {
@@ -124,6 +126,10 @@ func (m *Manager) EnablePersistence(dir string) error {
 			filePath: rec.FilePath, created: rec.Created, finished: rec.Finished, cancel: make(chan struct{}), resumeTotal: rec.Total, resumeValidator: rec.Validator, resumeResource: rec.ResourceFingerprint,
 			publishSHA256: rec.PublishSHA256, publishSize: rec.PublishSize}
 		t.signatureVerified.Store(rec.SignatureVerified && rec.State == Done)
+		if validFingerprint(rec.StableResourceFingerprint) {
+			t.resumeStableResource = rec.StableResourceFingerprint
+		}
+		t.resumeUnverified = rec.UnverifiedChunks
 		t.browserOrigin = rec.BrowserOrigin
 		t.elapsed.Store(int64(rec.Elapsed))
 		if (t.mediaMode == "dash-fmp4" || t.mediaMode == "hls-ts") && rec.State != Done {
@@ -297,6 +303,8 @@ func (m *Manager) saveTaskLocked(t *Task) error {
 	rec := storedTask{Version: 1, ID: t.id, Request: Request{URL: storedURL, PageURL: pageURL, Title: t.title, Name: t.nameHint, KeepExtension: t.keepExtension, MediaMode: t.mediaMode, MediaQuality: t.mediaQuality, AudioLanguage: t.audioLanguage, Headers: headers, Connections: t.conns, Directory: t.directory, OpenFolder: t.openFolder, Queue: queue, SHA256: expected, RequireSignature: s.SignatureRequired, Signature: signatureText, SignatureKey: signatureKey},
 		State: s.State, Held: s.Held, FilePath: s.FilePath, Created: s.Created, Finished: s.Finished, NightSince: s.NightSince, Total: t.resumeTotal, Validator: t.resumeValidator, ResourceFingerprint: t.resumeResource, Error: s.Err, CredentialsOmitted: omitted, VerifiedSHA256: verified, FailedSHA256: failed, PublishSHA256: publishHash, PublishSize: publishSize}
 	rec.ClientRequestID, rec.SubmissionSHA256 = t.clientRequestID, t.submissionSHA256
+	rec.StableResourceFingerprint = t.resumeStableResource
+	rec.UnverifiedChunks = t.resumeUnverified
 	rec.Elapsed = s.Elapsed
 	rec.BrowserOrigin = s.BrowserOrigin
 	rec.SignatureVerified = s.SignatureVerified

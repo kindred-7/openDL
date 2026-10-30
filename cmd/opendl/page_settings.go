@@ -149,6 +149,7 @@ var settingsEntries = []settingsEntry{
 	{"directory", "下载", "默认保存位置", "新下载默认保存到此文件夹，已有任务不受影响。", "目录 路径 文件夹 保存"},
 	{"connections", "下载", "默认连接数", "新任务默认使用的连接数，可在添加下载时单独调整。", "分段 连接 数量"},
 	{"max-connections", "下载", "最大连接数", "所有任务合计的连接数上限，0 表示无限制。", "连接 上限 并发 全局"},
+	{"unverified-resume", "下载", "允许未校验续传", "没有 SHA-256 时，允许在无法确认文件一致的情况下保留已下载分段；文件可能损坏。", "续传 分段 校验 风险 SHA-256"},
 	{"media-mux", "下载", "媒体合并程序", "独立音视频轨需要本机 FFmpeg；留空时从系统 PATH 查找。", "媒体 音轨 合并 FFmpeg 路径"},
 	{"category-dirs", "下载", "分类保存目录", "按文件类型归档到默认保存目录下的子目录。", "分类 目录 归档 子目录 category"},
 	{"category-exts", "下载", "分类扩展名规则", "按分类自定义识别的文件扩展名，留空恢复内置规则。", "分类 扩展名 文件类型 规则 category"},
@@ -191,7 +192,7 @@ var settingsGroups = []settingsGroup{
 	{"面板", "界面", []string{"detail", "reset-layout"}},
 	{"键盘快捷键", "界面", []string{"shortcuts"}},
 
-	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "connections", "max-connections"}},
+	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "connections", "max-connections", "unverified-resume"}},
 	{"速度与流量", "下载", []string{"speed", "traffic-quota"}},
 	{"媒体合并程序", "下载", []string{"media-mux"}},
 	{"分类保存目录", "下载", []string{"category-dirs"}},
@@ -1197,6 +1198,12 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 						Width(settingsControlWidth).Shrink(0).Tooltip(tr("代理设置用于后续网络请求，已传输的响应继续使用原连接")).OnChange(s.proxyEdited)
 				case "clipboard":
 					settingsSwitch(c, p, "剪贴板监听", &s.owner.clipOn).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
+				case "unverified-resume":
+					settingsSwitch(c, p, "允许未校验续传", &s.owner.preferences.AllowUnverifiedResume).OnChange(func() {
+						s.owner.mgr.SetAllowUnverifiedResume(s.owner.preferences.AllowUnverifiedResume)
+						s.owner.saveAppPreferences()
+						s.changed()
+					})
 				case "notify-complete":
 					settingsSwitch(c, p, "下载完成通知", &s.owner.preferences.NotifyComplete).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "autostart":

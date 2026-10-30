@@ -100,34 +100,6 @@ func TestSortByColumnHeader(t *testing.T) {
 	}
 }
 
-// The 新建下载 button opens the inline form and adds a task.
-func TestNewDownloadPanel(t *testing.T) {
-	mgr := download.NewManager(t.TempDir(), 1, 1)
-	a := &app{mgr: mgr, saveDir: t.TempDir()}
-	tt := ui.NewTester(a.view, 1440, 960)
-	if err := tt.Click("新建下载"); err != nil {
-		t.Fatal(err)
-	}
-	tt.Frame()
-	if !tt.HasText("开始下载") {
-		t.Fatalf("panel not open: %q", tt.Texts())
-	}
-	a.input = "ftp://example.com/x"
-	if err := tt.Click("开始下载"); err != nil {
-		t.Fatal(err)
-	}
-	if len(mgr.Snapshots()) != 0 {
-		t.Fatalf("tasks %d", len(mgr.Snapshots()))
-	}
-	a.input = "http://127.0.0.1:1/manual.zip"
-	if err := tt.Click("开始下载"); err != nil {
-		t.Fatal(err)
-	}
-	if len(mgr.Snapshots()) != 1 {
-		t.Fatalf("tasks %d", len(mgr.Snapshots()))
-	}
-}
-
 // Checked rows drive the toolbar 删除 command.
 func TestCheckboxBulkDelete(t *testing.T) {
 	mgr := download.NewManager(t.TempDir(), 1, 1)

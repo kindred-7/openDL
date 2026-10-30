@@ -86,6 +86,7 @@ func (pg *mainPage) importSettings() {
 	}
 	pg.mgr.SetDownloadDefaults(pg.saveDir, prefs.Connections)
 	pg.mgr.SetMaxConnections(prefs.MaxConnections)
+	pg.mgr.SetAllowUnverifiedResume(prefs.AllowUnverifiedResume)
 	pg.mgr.SetRateLimit(int64(prefs.RateMBps * float64(1<<20)))
 	if pg.showAdd {
 		pg.defaultDirPending, pg.defaultConnsPending = true, true

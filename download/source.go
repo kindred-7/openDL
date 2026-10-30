@@ -12,8 +12,8 @@ import (
 )
 
 // UpdateSource replaces a stopped task's address and request headers. A new
-// URL cannot be assumed to identify the same resource even when ETags match;
-// its old checkpoints are discarded before another transfer can start.
+// URL cannot be assumed to identify the same resource even when ETags match.
+// Ordinary HTTP checkpoints may be retained only with a final SHA-256 check.
 // Call from a worker because the journal may require disk synchronization.
 func (m *Manager) UpdateSource(id, address string, headers map[string]string) (bool, error) {
 	return m.updateSource(id, address, headers, nil, nil, nil)
@@ -91,6 +91,8 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 	if expected != nil {
 		t.expectedSHA256 = *expected
 	}
+	keepHTTPChunks := changed && t.mediaMode == "" && (t.expectedSHA256 != "" || m.allowUnverifiedResume.Load())
+	unverifiedChange := keepHTTPChunks && t.expectedSHA256 == ""
 	if signatureKey != nil {
 		t.signatureKey = *signatureKey
 	}
@@ -109,6 +111,7 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 	t.metaMu.Unlock()
 	t.clearDigest()
 	oldCompleted, oldTotal, oldValidator, oldResource := t.completed, t.resumeTotal, t.resumeValidator, t.resumeResource
+	oldUnverified := t.resumeUnverified
 	oldHLSPlaylist, oldHLSCompleted := t.hlsPlaylist, t.hlsCompleted
 	oldHLSSplice := t.hlsSplice
 	oldHLSFormat := t.hlsFormat
@@ -118,7 +121,12 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 	oldAuth, oldError := t.needsAuth.Load(), t.errText()
 	if changed {
 		t.remoteValidator, t.remoteResource = "", ""
-		t.completed, t.resumeTotal, t.resumeValidator, t.resumeResource = nil, 0, "", ""
+		if !keepHTTPChunks {
+			t.completed, t.resumeTotal, t.resumeValidator, t.resumeResource = nil, 0, "", ""
+			t.resumeUnverified = false
+		} else if unverifiedChange && len(t.completed) > 0 {
+			t.resumeUnverified = true
+		}
 		t.hlsPlaylist, t.hlsCompleted = "", nil
 		t.hlsSplice = nil
 		t.hlsFormat = ""
@@ -138,6 +146,7 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 		t.publishSHA256, t.publishSize = oldPublishHash, oldPublishSize
 		t.metaMu.Unlock()
 		t.completed, t.resumeTotal, t.resumeValidator, t.resumeResource = oldCompleted, oldTotal, oldValidator, oldResource
+		t.resumeUnverified = oldUnverified
 		t.hlsPlaylist, t.hlsCompleted = oldHLSPlaylist, oldHLSCompleted
 		t.hlsSplice = oldHLSSplice
 		t.hlsFormat = oldHLSFormat
@@ -163,8 +172,10 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 				}
 			}
 		}
-		t.done.Store(0)
-		t.total.Store(0)
+		if !keepHTTPChunks {
+			t.done.Store(0)
+			t.total.Store(0)
+		}
 		t.rangeSupport.Store(0)
 		t.resumeSafe.Store(false)
 		t.resetSegments(nil)

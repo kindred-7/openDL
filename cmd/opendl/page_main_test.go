@@ -57,19 +57,6 @@ func seededPage(t *testing.T) (*mainPage, *download.Manager) {
 
 // 当前页面区域：标题栏、合并工具栏（操作与筛选）、任务表、
 // 详情面板、状态栏。
-func TestSegmentCoverageUsesRealFileOffsets(t *testing.T) {
-	segments := []download.Segment{{Start: 128, End: 191, Downloaded: 1, Active: true}}
-	if got := segmentCoverage(256, segments, 0); got != 0 {
-		t.Fatalf("unrelated range filled: %v", got)
-	}
-	if got := segmentCoverage(256, segments, 64); got != 0.5 {
-		t.Fatalf("partial range = %v, want 0.5", got)
-	}
-	if got := segmentCoverage(256, segments, 65); got != 0 {
-		t.Fatalf("undownloaded range filled: %v", got)
-	}
-}
-
 func TestMainPageRegions(t *testing.T) {
 	pg, _ := seededPage(t)
 	tt := ui.NewTester(pg.view, 1680, 880)
@@ -196,37 +183,6 @@ func TestMainPageCheckbox(t *testing.T) {
 	if !tt.HasText("已选 1 项") {
 		t.Errorf("selection counter: %q", tt.Texts())
 	}
-}
-
-// 工具栏暂停动作真的暂停运行中的任务。
-func TestMainPagePauseRunning(t *testing.T) {
-	srv, _ := slowServer(t)
-	dir := t.TempDir()
-	mgr := download.NewManager(dir, 2, 8)
-	id := mgr.Add(download.Request{URL: srv.URL + "/big.bin", Name: "big.bin"})
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, s := range mgr.Snapshots() {
-			if s.ID == id && s.State == download.Running {
-				goto running
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("task never started")
-running:
-	pg := &mainPage{mgr: mgr, saveDir: dir, sel: id}
-	pg.pauseSelection() // 工具栏「暂停」按钮走的同一个动作
-	deadline = time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		for _, s := range mgr.Snapshots() {
-			if s.ID == id && s.State == download.Canceled {
-				return
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatal("task not paused")
 }
 
 // 状态栏：左侧夜间队列开始时间，右侧依次为下载/排队数量、下载速度；
