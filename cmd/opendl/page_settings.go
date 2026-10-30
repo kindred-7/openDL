@@ -136,7 +136,7 @@ func categoryTitle(id string) string {
 }
 
 var settingsEntries = []settingsEntry{
-	{"updates", "常规", "应用更新", "使用可信发布源检查更新，安装失败时恢复旧版本。", "更新 版本 发布 签名 自动 update version release signature"},
+	{"updates", "常规", "应用更新", "使用可信发布源检查更新，安装失败时尝试恢复程序文件。", "更新 版本 发布 签名 自动 update version release signature"},
 	{"language", "常规", "语言", "选择应用显示语言，立即生效。", "语言 language English 中文"},
 	{"appearance", "界面", "外观", "选择主题或跟随系统。", "主题 深色 浅色 跟随系统 颜色"},
 	{"accent", "界面", "主题色", "选择全局强调色，适配亮色和深色主题。", "颜色 主题色 色盘 强调色 radix color accent"},

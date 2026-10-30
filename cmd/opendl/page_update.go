@@ -202,7 +202,13 @@ func (pg *mainPage) checkForUpdates(quiet bool) {
 	if pg.updater.busy || pg.win == nil {
 		return
 	}
-	pg.discardStagedUpdate()
+	if pg.updater.pending != nil || pg.updater.installer != "" {
+		if !quiet {
+			pg.updater.message = tr("更新已下载，请先重启安装或放弃下载")
+			pg.updateChanged()
+		}
+		return
+	}
 	config := effectiveUpdateConfig(pg.preferences.Updates)
 	if pg.mgr != nil {
 		config.Transport = pg.mgr.UpdateTransport()
@@ -560,6 +566,11 @@ func (s *settingsPage) updateFields(c *ui.Context, p *d1Palette) {
 			}
 			if pg.updater.pending != nil || pg.updater.installer != "" {
 				d1PrimaryButton(c, p, "重启安装", "", !pg.updater.busy).OnClick(pg.restartForUpdate)
+				d1Button(c, p, "放弃下载", "", !pg.updater.busy).OnClick(func() {
+					pg.discardStagedUpdate()
+					pg.updater.message = tr("已放弃下载的更新")
+					pg.updateChanged()
+				})
 			}
 			if pg.updater.busy && pg.updater.cancel != nil {
 				d1Button(c, p, "取消", "").OnClick(func() {
