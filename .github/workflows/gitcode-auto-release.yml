@@ -136,6 +136,19 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Load publisher for manual recovery
+        if: github.event_name == 'workflow_dispatch' && steps.select.outputs.publish == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: release-control
+          persist-credentials: false
+
+      - name: Use current publisher for manual recovery
+        if: github.event_name == 'workflow_dispatch' && steps.select.outputs.publish == 'true'
+        run: |
+          Copy-Item -LiteralPath 'release-control/scripts/publish-gitcode-release.ps1' -Destination 'source/scripts/publish-gitcode-release.ps1' -Force
+
       - name: Publish on GitCode
         if: steps.select.outputs.publish == 'true'
         working-directory: source

@@ -37,7 +37,9 @@ $tagEncoded = [Uri]::EscapeDataString($Tag)
 $expectedURL = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases/' + $tagEncoded + '/attach_files/' + [Uri]::EscapeDataString($fileName) + '/download'
 if ($payload.version -cne $version -or @($payload.assets).Count -ne 1 -or $payload.assets[0].url -cne $expectedURL) { throw 'The signed manifest version or download URL does not match this release.' }
 $notes = [IO.File]::ReadAllText($notesPath, [Text.Encoding]::UTF8)
-if ($payload.notes -cne $notes) { throw 'Release notes do not match the signed manifest.' }
+if (($payload.notes -replace "`r`n", "`n") -cne ($notes -replace "`r`n", "`n")) { throw 'Release notes do not match the signed manifest.' }
+# Preserve the exact signed text when publishing; Git checkouts may change line endings.
+$notes = [string]$payload.notes
 
 $env:GIT_TERMINAL_PROMPT = '0'
 Write-Host "Checking remote tag $Tag..."
