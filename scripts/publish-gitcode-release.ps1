@@ -39,7 +39,9 @@ if ($payload.version -cne $version -or @($payload.assets).Count -ne 1 -or $paylo
 $notes = [IO.File]::ReadAllText($notesPath, [Text.Encoding]::UTF8)
 if ($payload.notes -cne $notes) { throw 'Release notes do not match the signed manifest.' }
 
-$remoteTag = & git ls-remote --tags https://gitcode.com/kindred-wu/openDL.git "refs/tags/$Tag"
+$env:GIT_TERMINAL_PROMPT = '0'
+Write-Host "Checking remote tag $Tag..."
+$remoteTag = & git -c credential.helper= ls-remote --tags https://gitcode.com/kindred-wu/openDL.git "refs/tags/$Tag"
 if ($LASTEXITCODE -ne 0 -or -not $remoteTag) { throw "Remote tag $Tag was not found. Push the version tag before publishing." }
 $secureToken = $null
 if ($env:GITCODE_TOKEN) {
@@ -56,12 +58,25 @@ $query = "access_token=$tokenEncoded"
 $created = $false
 try {
     $body = @{ tag_name = $Tag; name = "OpenDL $version"; body = $notes; release_status = 'pre' } | ConvertTo-Json -Compress
-    try { Invoke-RestMethod -Method Post -Uri "${api}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) | Out-Null }
-    catch { throw 'Failed to create the prerelease. Check the token permissions and whether this release already exists.' }
+    $existing = $null
+    try { $existing = Invoke-RestMethod -Method Get -Uri "${api}/tags/${tagEncoded}?$query" } catch { }
+    if ($existing) {
+        # GitCode 会在推送标签时自动生成仅有源码包的预发布：接管它并补全资产。
+        $update = @{ name = "OpenDL $version"; body = $notes } | ConvertTo-Json -Compress
+        try { Invoke-RestMethod -Method Patch -Uri "${releasePath}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($update)) | Out-Null }
+        catch { throw 'Failed to update the existing prerelease. Check the token permissions.' }
+    } else {
+        try { Invoke-RestMethod -Method Post -Uri "${api}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) | Out-Null }
+        catch { throw 'Failed to create the prerelease. Check the token permissions and whether this release already exists.' }
+    }
     $created = $true
+    $names = @()
+    try { $names = @((Invoke-RestMethod -Method Get -Uri "${api}/tags/${tagEncoded}?$query").assets | ForEach-Object { $_.name }) } catch { }
     foreach ($path in @($installerPath, $manifestPath)) {
         $name = [IO.Path]::GetFileName($path)
+        if ($names -contains $name) { Write-Host "Already uploaded: $name"; continue }
         $nameEncoded = [Uri]::EscapeDataString($name)
+        Write-Host "Uploading $name..."
         try { $upload = Invoke-RestMethod -Method Get -Uri "$releasePath/upload_url?${query}&file_name=$nameEncoded" }
         catch { throw "Failed to obtain an upload URL for $name." }
         $uploadUri = $null
@@ -72,7 +87,7 @@ try {
         }
         $contentType = [string]$upload.headers.'Content-Type'
         if (-not $contentType) { $contentType = 'application/octet-stream' }
-        try { Invoke-WebRequest -Method Put -Uri $uploadUri.AbsoluteUri -Headers $headers -ContentType $contentType -InFile $path | Out-Null }
+        try { Invoke-WebRequest -Method Put -Uri $uploadUri.AbsoluteUri -Headers $headers -ContentType $contentType -InFile $path -TimeoutSec 600 | Out-Null }
         catch { throw "Failed to upload $name." }
         Write-Host "Uploaded: $name"
     }
@@ -80,6 +95,7 @@ try {
     catch { throw 'Failed to read the uploaded release assets.' }
     $names = @($release.assets | ForEach-Object { $_.name })
     if ($names -cnotcontains $fileName -or $names -cnotcontains 'releases.json') { throw 'The release does not list both uploaded files.' }
+    Write-Host 'Marking the release as latest...'
     $body = @{ name = "OpenDL $version"; body = $notes; release_status = 'latest' } | ConvertTo-Json -Compress
     try { Invoke-RestMethod -Method Patch -Uri "${releasePath}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) | Out-Null }
     catch { throw 'Files were uploaded, but marking the release as latest failed.' }
