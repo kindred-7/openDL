@@ -125,6 +125,17 @@ jobs:
             ./scripts/prepare-gitcode-update.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -PrivateKey $key -Tag $env:RELEASE_TAG
           } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
 
+      - name: Save signed release files
+        if: steps.select.outputs.publish == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenDL-release-${{ steps.select.outputs.version }}
+          path: |
+            source/build/windows-amd64/${{ env.INSTALLER_NAME }}
+            source/build/windows-amd64/releases.json
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Publish on GitCode
         if: steps.select.outputs.publish == 'true'
         working-directory: source

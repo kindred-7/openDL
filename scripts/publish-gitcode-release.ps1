@@ -88,7 +88,13 @@ try {
         $contentType = [string]$upload.headers.'Content-Type'
         if (-not $contentType) { $contentType = 'application/octet-stream' }
         try { Invoke-WebRequest -Method Put -Uri $uploadUri.AbsoluteUri -Headers $headers -ContentType $contentType -InFile $path -TimeoutSec 600 | Out-Null }
-        catch { throw "Failed to upload $name." }
+        catch {
+            # Do not print the exception message or request URL: the signed
+            # upload URL and headers may contain credentials.
+            $errorType = $_.Exception.GetType().FullName
+            $status = if ($_.Exception.Response -and $_.Exception.Response.StatusCode) { " HTTP $([int]$_.Exception.Response.StatusCode)." } else { '' }
+            throw "Failed to upload $name. Error type: $errorType.$status Upload timeout: 600 seconds."
+        }
         Write-Host "Uploaded: $name"
     }
     try { $release = Invoke-RestMethod -Method Get -Uri "${api}/tags/${tagEncoded}?$query" }
