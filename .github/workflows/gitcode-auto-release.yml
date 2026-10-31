@@ -287,7 +287,10 @@ jobs:
           }
           $installer = $env:INSTALLER_NAME
           foreach ($name in @($installer, 'releases.json')) {
-            $existing = @($release.assets | Where-Object { $_.name -ceq $name })
+            # GitHub normalizes spaces in release asset names to dots.
+            $acceptedNames = @($name)
+            if ($name -ceq $installer) { $acceptedNames += $name.Replace(' ', '.') }
+            $existing = @($release.assets | Where-Object { $acceptedNames -ccontains $_.name })
             $local = Join-Path 'release-assets' $name
             if ($existing.Count -gt 1) { throw "Duplicate GitHub asset: $name" }
             if ($existing.Count -eq 1) {
@@ -306,7 +309,7 @@ jobs:
                 Invoke-RestMethod -Method Post -Headers $headers -Uri $upload -ContentType 'application/octet-stream' -Body ([IO.File]::ReadAllBytes($local)) | Out-Null
               } catch {
                 $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
-                $raced = @($release.assets | Where-Object { $_.name -ceq $name })
+                $raced = @($release.assets | Where-Object { $acceptedNames -ccontains $_.name })
                 if ($raced.Count -ne 1) { throw "Failed to upload GitHub asset: $name" }
                 $temp = Join-Path $env:RUNNER_TEMP ('opendl-github-' + [guid]::NewGuid().ToString('N'))
                 New-Item -ItemType Directory -Path $temp | Out-Null
