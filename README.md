@@ -25,6 +25,10 @@ OpenDL 帮助你集中管理下载任务，并通过浏览器扩展发现网页�
 
 安装后启动 OpenDL，在设置中选择下载目录。Windows 桌面应用启动时会为当前用户注册浏览器通信主机。
 
+从源码构建 Windows 安装器需要 Go 和 Inno Setup 6.6 或更新版本。首次在本机运行 `./scripts/install-mygo-installer-adapter.ps1` 后，可在项目根目录直接运行 `go tool mygo build`；适配器只针对 OpenDL，其他项目仍调用原始 NSIS。安装器输出为 `build/windows-<架构>/OpenDL Setup <版本> <架构>.exe`。
+
+若现有开发程序正在使用构建目录，可改用 `./scripts/build-windows-installer.ps1`；它在临时目录中构建应用，避免占用冲突。ARM64 使用 `-Architecture arm64`。可见安装界面使用与应用相同的 MyGo 组件和主题，Inno Setup 仅作为后台安装与卸载引擎。
+
 ### 浏览器扩展
 
 Chrome 网上应用店版本已提交审核；是否可安装以商店实际状态为准。商店版本可用后，请确认扩展名称和发布者再安装。

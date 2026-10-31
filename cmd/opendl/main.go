@@ -15,6 +15,7 @@ import (
 	"openDL/api"
 	"openDL/download"
 	"openDL/i18n"
+	"openDL/installerconfig"
 	"openDL/nativehost"
 	"openDL/style"
 
@@ -913,9 +914,35 @@ func main() {
 	themeMode := loadThemeMode()
 	var mainWindowPage *mainPage
 	mygo.App.WhenReady(func() {
-		if firstRun {
+		// Apply the installer's explicit choice once, without replacing other settings.
+		executable, exeErr := os.Executable()
+		if exeErr != nil {
+			log.Printf("读取程序路径: %v", exeErr)
+		}
+		if enabled, present, err := installerconfig.ReadAutoStart(executable); err != nil {
+			log.Printf("读取安装器启动设置: %v", err)
+		} else if present {
+			if err := mygo.App.SetOpenAtLogin(enabled); err != nil {
+				log.Printf("应用安装器启动设置: %v", err)
+			} else {
+				preferences.AutoStart = &enabled
+				if err := writeAppPreferences(preferences); err != nil {
+					log.Printf("保存安装器启动设置: %v", err)
+				} else if err := installerconfig.ClearAutoStart(); err != nil {
+					log.Printf("清理安装器启动设置: %v", err)
+				}
+			}
+		}
+		// 开机自启动默认开启：从未在设置中选择过时登记一次并记录，之后由
+		// 设置开关与系统状态维护，任务管理器等外部禁用不覆盖。
+		autoStartRecorded := false
+		if preferences.AutoStart == nil {
 			if err := mygo.App.SetOpenAtLogin(true); err != nil {
 				log.Printf("无法启用开机自动启动: %v", err)
+			} else {
+				chosen := true
+				preferences.AutoStart = &chosen
+				autoStartRecorded = true
 			}
 		}
 		applyNativeThemeMode(themeMode)
@@ -973,7 +1000,7 @@ func main() {
 		}
 		// 窗口事件与后台工作在窗口创建后立即绑定，不等首次视图构建。
 		pg.startWindow()
-		if firstRun {
+		if firstRun || autoStartRecorded {
 			pg.saveAppPreferences()
 		}
 		go func() {

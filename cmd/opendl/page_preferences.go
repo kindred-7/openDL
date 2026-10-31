@@ -43,6 +43,7 @@ type appPreferences struct {
 	Clipboard             bool                       `json:"clipboard"`
 	DragFileAction        string                     `json:"drag_file_action,omitempty"`
 	FileExistsAction      string                     `json:"file_exists_action,omitempty"`
+	AutoStart             *bool                      `json:"auto_start,omitempty"`
 	MinTrayStart          bool                       `json:"min_tray_start"`
 	MinTrayClose          bool                       `json:"min_tray_close"`
 	NotifyComplete        bool                       `json:"notify_complete"`
@@ -78,7 +79,7 @@ type appPreferences struct {
 }
 
 func defaultAppPreferences() appPreferences {
-	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, MinTrayStart: true, MinTrayClose: true, NotifyComplete: false, NotifyApp: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
+	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, MinTrayStart: false, MinTrayClose: true, NotifyComplete: false, NotifyApp: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
 }
 
 var connectionOptions = [...]int{-1, 1, 4, 8, 16, 32}

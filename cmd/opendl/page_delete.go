@@ -38,6 +38,30 @@ func (pg *mainPage) deleteDialog(c *ui.Context, p *d1Palette) {
 	})
 }
 
+// trashLocalFile 把本地文件移入回收站；文件已不存在视为成功。
+func trashLocalFile(path string) error {
+	path = filepath.Clean(path)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("not a regular file")
+	}
+	// A file may disappear between the initial check and the recycle-bin
+	// operation; in that case there is nothing left to remove.
+	err = mygo.Shell.TrashItem(path)
+	if err != nil {
+		if _, statErr := os.Lstat(path); os.IsNotExist(statErr) {
+			err = nil
+		}
+	}
+	return err
+}
+
 func (pg *mainPage) confirmDelete() {
 	current := make(map[string]d1Row)
 	for _, row := range pg.allRows() {
@@ -86,23 +110,7 @@ func (pg *mainPage) confirmDelete() {
 				}
 				continue
 			}
-			info, err := os.Lstat(path)
-			if os.IsNotExist(err) {
-				err = nil
-			} else if err == nil {
-				if !info.Mode().IsRegular() {
-					err = fmt.Errorf("not a regular file")
-				} else {
-					err = mygo.Shell.TrashItem(path)
-					// A file may disappear between the initial check and the
-					// recycle-bin operation; in that case there is nothing left to remove.
-					if err != nil {
-						if _, statErr := os.Lstat(path); os.IsNotExist(statErr) {
-							err = nil
-						}
-					}
-				}
-			}
+			err := trashLocalFile(path)
 			paths[path] = err
 			if err != nil {
 				failed[row.id] = err

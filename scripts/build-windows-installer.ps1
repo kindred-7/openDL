@@ -1,43 +1,37 @@
 param(
-    [ValidateSet('amd64', 'arm64')][string]$Architecture = 'amd64',
-    [string]$Makensis = ''
+    [ValidateSet('amd64','arm64')][string]$Architecture = 'amd64',
+    [string]$InnoSetup = ''
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+$config = Get-Content -LiteralPath (Join-Path $root 'mygo.json') -Raw | ConvertFrom-Json
+$temp = Join-Path ([IO.Path]::GetTempPath()) ('opendl-installer-build-' + [guid]::NewGuid().ToString('N'))
+$oldSkip = $env:OPENDL_SKIP_MYGO_INSTALLER
+New-Item -ItemType Directory -Path $temp | Out-Null
 Push-Location $root
 try {
-    $config = Get-Content -LiteralPath (Join-Path $root 'mygo.json') -Raw | ConvertFrom-Json
-    & go tool mygo build -platform "windows/$Architecture"
-    if ($LASTEXITCODE -ne 0) { throw 'MyGo build failed.' }
-    $stage = Join-Path $root (Join-Path $config.out "windows-$Architecture")
-    $oldInstaller = Join-Path $stage "OpenDL Setup $($config.version) $Architecture.exe"
-    # Do not leave the stock installer in the release directory if this step fails.
-    if (Test-Path -LiteralPath $oldInstaller) { Remove-Item -LiteralPath $oldInstaller -Force }
-    if (-not $Makensis) {
-        $found = Get-Command makensis.exe -ErrorAction SilentlyContinue
-        if ($found) { $Makensis = $found.Source }
-        else {
-            $candidates = @(
-                (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'),
-                (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
-                (Join-Path $env:LOCALAPPDATA 'mygo\nsis-3.13\Bin\makensis.exe'),
-                (Join-Path $env:LOCALAPPDATA 'mygo\nsis-3.13\makensis.exe')
-            )
-            $Makensis = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-        }
-    }
-    if (-not $Makensis) { throw 'NSIS makensis.exe not found. Install NSIS or pass -Makensis.' }
-    $output = Join-Path $stage "OpenDL.Setup.$($config.version).$Architecture.exe"
-    $temporary = Join-Path ([IO.Path]::GetTempPath()) ("opendl-setup-" + [Guid]::NewGuid().ToString('N') + '.exe')
-    $icon = Join-Path ([IO.Path]::GetTempPath()) ("opendl-icon-" + [Guid]::NewGuid().ToString('N') + '.ico')
-    try {
-        & (Join-Path $PSScriptRoot 'create-installer-icon.ps1') -Source (Join-Path $root 'resources/icon.png') -Output $icon
-        & $Makensis "/DSTAGE=$stage" "/DOUTPUT=$temporary" "/DVERSION=$($config.version)" "/DICON=$icon" "/DHELPER=$(Join-Path $PSScriptRoot 'installer-stop.ps1')" (Join-Path $PSScriptRoot 'windows-installer.nsi')
-        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $temporary)) { throw 'NSIS installer generation failed.' }
-        Move-Item -LiteralPath $temporary -Destination $output -Force
-    } finally {
-        if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
-        if (Test-Path -LiteralPath $icon) { Remove-Item -LiteralPath $icon -Force }
-    }
+    # The isolated build avoids replacing a development directory in use.
+    $env:OPENDL_SKIP_MYGO_INSTALLER = '1'
+    & go tool mygo build -platform "windows/$Architecture" -o $temp
+    if ($LASTEXITCODE -ne 0) { throw 'MyGo application build failed.' }
+    $stage = Join-Path $temp "windows-$Architecture"
+    $name = "OpenDL Setup $($config.version) $Architecture.exe"
+    $packageArgs = @{ Stage=$stage; OutputFile=(Join-Path $stage $name); Version=$config.version; Architecture=$Architecture }
+    if ($InnoSetup) { $packageArgs.InnoSetup = $InnoSetup }
+    & (Join-Path $PSScriptRoot 'package-windows-installer.ps1') @packageArgs
+    $outputDir = Join-Path $root (Join-Path $config.out "windows-$Architecture")
+    New-Item -ItemType Directory -Force -Path $outputDir | Out-Null
+    $output = Join-Path $outputDir $name
+    Move-Item -LiteralPath (Join-Path $stage $name) -Destination $output -Force
     Write-Host "Installer: $output"
-} finally { Pop-Location }
+} finally {
+    $env:OPENDL_SKIP_MYGO_INSTALLER = $oldSkip
+    Pop-Location
+    if (Test-Path -LiteralPath $temp) {
+        $resolved = (Resolve-Path -LiteralPath $temp).Path
+        $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        if (-not $resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            -not [IO.Path]::GetFileName($resolved).StartsWith('opendl-installer-build-')) { throw "Unexpected temporary path: $resolved" }
+        Remove-Item -LiteralPath $resolved -Recurse -Force
+    }
+}

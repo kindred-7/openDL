@@ -1216,6 +1216,10 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 						if err := s.owner.setAutoStart(s.autoStart); err != nil {
 							s.autoStart = !s.autoStart
 							s.autostartError = tr("无法设置开机自动启动：") + err.Error()
+						} else {
+							chosen := s.autoStart
+							s.owner.preferences.AutoStart = &chosen
+							s.owner.saveAppPreferences()
 						}
 						s.changed()
 					})

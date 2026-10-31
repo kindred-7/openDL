@@ -48,9 +48,10 @@ $assets = @()
 $assetArgs = @()
 foreach ($item in $paths) {
     $filename = [IO.Path]::GetFileName($item.path)
-    $expectedFilename = "OpenDL.Setup.$version.$($item.arch).exe"
-    if ($filename -cne $expectedFilename) {
-        throw "Expected $expectedFilename for $($item.arch), got $filename. Use the output from scripts/build-windows-installer.ps1."
+    $expectedFilename = "OpenDL Setup $version $($item.arch).exe"
+    $legacyFilename = "OpenDL.Setup.$version.$($item.arch).exe"
+    if ($filename -cne $expectedFilename -and $filename -cne $legacyFilename) {
+        throw "Expected $expectedFilename or $legacyFilename for $($item.arch), got $filename."
     }
     if ($Provider -eq 'gitcode') {
         $url = 'https://api.gitcode.com/api/v5/repos/' + $Repository + '/releases/' + [Uri]::EscapeDataString($Tag) + '/attach_files/' + [Uri]::EscapeDataString($filename) + '/download'

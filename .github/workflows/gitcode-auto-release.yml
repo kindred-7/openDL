@@ -51,7 +51,8 @@ jobs:
             $release = Invoke-RestMethod -Uri "$api/tags/$encoded"
             if ($release.release_status -eq 'pre' -or $release.prerelease -eq $true) { throw 'The newest tag already has a prerelease; inspect it manually.' }
             $names = @($release.assets | ForEach-Object { $_.name })
-            if ($names -cnotcontains 'releases.json' -or $names -cnotcontains "OpenDL.Setup.$($tags[0].Version).amd64.exe") { throw 'The newest release is missing required assets; inspect it manually.' }
+            $candidates = @("OpenDL Setup $($tags[0].Version) amd64.exe", "OpenDL.Setup.$($tags[0].Version).amd64.exe")
+            if ($names -cnotcontains 'releases.json' -or @($candidates | Where-Object { $names -ccontains $_ }).Count -eq 0) { throw 'The newest release is missing a recognized installer or releases.json; inspect it manually.' }
             Write-Host "Release $tag already exists; nothing to do."
             "publish=false" >> $env:GITHUB_OUTPUT
           } catch {
@@ -92,13 +93,19 @@ jobs:
       - name: Build installer
         if: steps.select.outputs.publish == 'true'
         working-directory: source
+        env:
+          RELEASE_VERSION: ${{ steps.select.outputs.version }}
         run: |
           $ErrorActionPreference = 'Stop'
-          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue)) {
-            choco install nsis --yes --no-progress
-            if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          if (-not (Get-Command iscc.exe -ErrorAction SilentlyContinue)) {
+            choco install innosetup --yes --no-progress
+            if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed.' }
           }
           ./scripts/build-windows-installer.ps1
+          $candidates = @("OpenDL Setup $env:RELEASE_VERSION amd64.exe", "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe")
+          $found = @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path 'build/windows-amd64' $_) })
+          if ($found.Count -ne 1) { throw 'Build must produce exactly one recognized installer.' }
+          "INSTALLER_NAME=$($found[0])" >> $env:GITHUB_ENV
 
       - name: Sign release manifest
         if: steps.select.outputs.publish == 'true'
@@ -113,7 +120,7 @@ jobs:
           $key = Join-Path $env:RUNNER_TEMP ('opendl-key-' + [guid]::NewGuid().ToString('N'))
           try {
             [IO.File]::WriteAllText($key, $env:RELEASE_PRIVATE_KEY.Trim(), [Text.UTF8Encoding]::new($false))
-            ./scripts/prepare-gitcode-update.ps1 -Installer "build/windows-amd64/OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe" -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -PrivateKey $key -Tag $env:RELEASE_TAG
+            ./scripts/prepare-gitcode-update.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -PrivateKey $key -Tag $env:RELEASE_TAG
           } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
 
       - name: Publish on GitCode
@@ -126,7 +133,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
-          ./scripts/publish-gitcode-release.ps1 -Installer "build/windows-amd64/OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe" -Manifest 'build/windows-amd64/releases.json' -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -Tag $env:RELEASE_TAG
+          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -Manifest 'build/windows-amd64/releases.json' -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -Tag $env:RELEASE_TAG
 
   sync-github:
     needs: release
@@ -149,9 +156,14 @@ jobs:
           $tag = [Uri]::EscapeDataString($env:RELEASE_TAG)
           $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
           $release = Invoke-RestMethod -Uri "$api/tags/$tag"
-          $installer = "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
           $names = @($release.assets | ForEach-Object { $_.name })
-          if ($release.release_status -eq 'pre' -or $release.prerelease -eq $true -or $names -cnotcontains $installer -or $names -cnotcontains 'releases.json') { throw 'GitCode release is not complete.' }
+          # Prefer the historical asset when both names exist, matching the
+          # previous workflow's behavior for already-published releases.
+          $candidates = @("OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe", "OpenDL Setup $env:RELEASE_VERSION amd64.exe")
+          $found = @($candidates | Where-Object { $names -ccontains $_ })
+          if ($release.release_status -eq 'pre' -or $release.prerelease -eq $true -or $found.Count -eq 0 -or $names -cnotcontains 'releases.json') { throw 'GitCode release is missing a recognized installer or releases.json.' }
+          $installer = $found[0]
+          "INSTALLER_NAME=$installer" >> $env:GITHUB_ENV
           git clone https://gitcode.com/kindred-wu/openDL.git source
           if ($LASTEXITCODE -ne 0) { throw 'Failed to clone GitCode source.' }
           Set-Location source
@@ -183,7 +195,7 @@ jobs:
           $key = Join-Path $env:RUNNER_TEMP ('opendl-public-' + [guid]::NewGuid().ToString('N'))
           try {
             [IO.File]::WriteAllText($key, $match.Groups[1].Value, [Text.UTF8Encoding]::new($false))
-            $installer = "release-assets/OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
+            $installer = Join-Path 'release-assets' $env:INSTALLER_NAME
             & go run ./cmd/release-sign -verify release-assets/releases.json -public $key -asset "windows/amd64/installer=$installer"
             if ($LASTEXITCODE -ne 0) { throw 'GitCode assets failed signature or checksum verification.' }
           } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
@@ -227,7 +239,7 @@ jobs:
             if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw 'Failed to inspect the GitHub release.' }
           }
           if (-not $release) {
-            & gh release create $env:RELEASE_TAG --repo $repo --verify-tag --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes (Join-Path 'release-assets' "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe") (Join-Path 'release-assets' 'releases.json')
+            & gh release create $env:RELEASE_TAG --repo $repo --verify-tag --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes (Join-Path 'release-assets' $env:INSTALLER_NAME) (Join-Path 'release-assets' 'releases.json')
             if ($LASTEXITCODE -ne 0) {
               # 该标签已有草稿发布时补全并转为正式发布，其余失败仍报错。
               & gh release edit $env:RELEASE_TAG --repo $repo --draft=false --title "OpenDL $env:RELEASE_VERSION" --notes-file $notes
@@ -235,7 +247,7 @@ jobs:
             }
             $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
           }
-          $installer = "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe"
+          $installer = $env:INSTALLER_NAME
           foreach ($name in @($installer, 'releases.json')) {
             $existing = @($release.assets | Where-Object { $_.name -ceq $name })
             $local = Join-Path 'release-assets' $name

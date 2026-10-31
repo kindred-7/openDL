@@ -15,7 +15,7 @@ if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'In
 if (-not $Tag) { $Tag = $version }
 if ($Tag -cne $version -and $Tag -cne "v$version") { throw 'The tag must match the project version.' }
 $fileName = [IO.Path]::GetFileName($installerPath)
-if ($fileName -cne "OpenDL.Setup.$version.amd64.exe") { throw 'The installer filename does not match the version and architecture.' }
+if ($fileName -cne "OpenDL Setup $version amd64.exe" -and $fileName -cne "OpenDL.Setup.$version.amd64.exe") { throw 'The installer filename does not match the version and architecture.' }
 if ([IO.Path]::GetFileName($manifestPath) -cne 'releases.json') { throw 'The manifest must be named releases.json.' }
 
 $source = [IO.File]::ReadAllText((Join-Path $root 'cmd\opendl\page_update.go'))

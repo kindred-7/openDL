@@ -126,6 +126,10 @@ type mainPage struct {
 	settingsWindow                      *settingsPage
 	completionWindow                    *mygo.Window
 	completionQueue                     []completionCardItem
+	completionMenuOpen                  bool
+	completionMenuInside                bool
+	completionMenuClosePending          bool
+	completionCardInside                bool
 	addWindow                           *mygo.Window
 	settingsSaveError                   string
 	updater                             updaterState
@@ -439,7 +443,7 @@ func (pg *mainPage) onChange() {
 					return
 				default:
 					if pg.preferences.NotifyApp {
-						pg.showCompletionCard(name, path)
+						pg.showCompletionCard(id, name, path)
 					}
 					if pg.preferences.NotifyComplete {
 						completeNotifier.add(name, id)
