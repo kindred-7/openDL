@@ -1522,8 +1522,20 @@ func (m *Manager) download(t *Task) error {
 	}
 	t.checkpointMu.Unlock()
 
+	filenameURL := address
+	// Download endpoints may redirect to a file whose name exists only in the
+	// final URL. Keep an explicit original filename and the response header as
+	// higher-priority sources.
+	initialExt := strings.ToLower(filepath.Ext(pathrec.FromURLPath(address)))
+	if resp.Request != nil && resp.Request.URL != nil {
+		finalURL := resp.Request.URL.String()
+		finalExt := filepath.Ext(pathrec.FromURLPath(finalURL))
+		if finalExt != "" && (initialExt == "" || initialExt == ".html" || initialExt == ".htm" || initialExt == ".php" || initialExt == ".asp" || initialExt == ".aspx" || initialExt == ".jsp") {
+			filenameURL = finalURL
+		}
+	}
 	originalName := pathrec.DeriveFilename(pathrec.Source{
-		URL: address, ContentDisposition: resp.Header.Get("Content-Disposition"),
+		URL: filenameURL, ContentDisposition: resp.Header.Get("Content-Disposition"),
 		ContentType: resp.Header.Get("Content-Type"), Title: t.title,
 	})
 	name := t.nameHint

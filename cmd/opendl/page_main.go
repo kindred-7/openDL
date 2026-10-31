@@ -195,6 +195,7 @@ type mainPage struct {
 	dlgSHA256                                              string
 
 	dlgDir, dlgPage, dlgUser, dlgPassword, dlgError, dlgName string
+	dlgRememberDir                                           bool
 	dlgGrabDepth, dlgGrabType                                string
 	dlgGrabProject, dlgGrabInterval                          string
 	grabProjectCache                                         []grabProject
@@ -2277,6 +2278,8 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 								ui.Text(c, tr("选择文件夹")).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
 							})
 							browse.OnClick(func() { pg.chooseDownloadDir() })
+							c.Key("remember-download-dir")
+							d1Check(c, p, &pg.dlgRememberDir, "设为默认").Shrink(0)
 						})
 					})
 				})

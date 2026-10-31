@@ -52,7 +52,8 @@ func (pg *mainPage) showNextCompletionCard() {
 	if item.name == "" {
 		item.name = filepath.Base(item.path)
 	}
-	const cardWidth, cardHeight, inset = 280, 128, 16
+	// Leave enough room for both action labels and the full bottom padding.
+	const cardWidth, cardHeight, inset = 380, 160, 16
 	area := mygo.Screen.PrimaryDisplay().WorkArea
 	width, height := cardWidth, cardHeight
 	if area.Width > 0 { width = min(width, max(1, area.Width-2*inset)) }

@@ -20,6 +20,7 @@ type browserDownloadWindow struct {
 	directory, name, message      string
 	suggestedName                 string
 	keepExtension, saving, closed bool
+	rememberDir                   bool
 }
 
 func (pg *mainPage) openBrowserDownload(req download.Request) {
@@ -70,6 +71,8 @@ func (d *browserDownloadWindow) view(c *ui.Context) {
 						d.directory = path
 					}
 				})
+				c.Key("browser-remember-directory")
+				d1Check(c, p, &d.rememberDir, "设为默认").Shrink(0).Disabled(d.saving)
 			})
 		})
 		ui.Row(c).FillWidth().Gap(12).AlignItems(ui.End).Children(func() {
@@ -117,6 +120,9 @@ func (d *browserDownloadWindow) submit() {
 			if err != nil {
 				d.message = err.Error()
 				return
+			}
+			if d.rememberDir {
+				d.owner.setDefaultDirectory(dir)
 			}
 			d.owner.sel = id
 			win.Close()

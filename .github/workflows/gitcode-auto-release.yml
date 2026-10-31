@@ -275,8 +275,22 @@ jobs:
                 if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash) { throw "Existing GitHub asset differs: $name" }
               } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
             } else {
-              # 补传缺失资产以便断点重跑；已存在的资产永不替换。
+              # 补传缺失资产以便断点重跑；已存在的资产永不替换。并发运行已上传
+              # 同名资产时改走校验，不把竞争当成失败。
               $upload = ($release.upload_url -replace '\{\?name,label\}$', '') + '?name=' + [Uri]::EscapeDataString($name)
-              Invoke-RestMethod -Method Post -Headers $headers -Uri $upload -ContentType 'application/octet-stream' -Body ([IO.File]::ReadAllBytes($local)) | Out-Null
+              try {
+                Invoke-RestMethod -Method Post -Headers $headers -Uri $upload -ContentType 'application/octet-stream' -Body ([IO.File]::ReadAllBytes($local)) | Out-Null
+              } catch {
+                $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag"
+                $raced = @($release.assets | Where-Object { $_.name -ceq $name })
+                if ($raced.Count -ne 1) { throw "Failed to upload GitHub asset: $name" }
+                $temp = Join-Path $env:RUNNER_TEMP ('opendl-github-' + [guid]::NewGuid().ToString('N'))
+                New-Item -ItemType Directory -Path $temp | Out-Null
+                try {
+                  $dest = Join-Path $temp $name
+                  Invoke-WebRequest -Headers @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/octet-stream' } -Uri $raced[0].url -OutFile $dest
+                  if ((Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash -cne (Get-FileHash -LiteralPath $local -Algorithm SHA256).Hash) { throw "Existing GitHub asset differs: $name" }
+                } finally { Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue }
+              }
             }
           }

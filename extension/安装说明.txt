@@ -21,6 +21,9 @@ Chrome / Microsoft Edge
 登录状态不能替代隧道、代理或 DNS 配置；如果桌面应用无法解析或连接站点，请先配置网络。
 
 Firefox
-本文件夹的 manifest.json 是 Chrome / Edge 版本，请勿直接改写安装目录中的文件。
-Firefox 需要单独准备扩展副本，将 manifest-firefox.json 替换副本中的 manifest.json，
-并按 Mozilla 的自行分发流程签名后安装。未经签名的扩展不能作为普通 Firefox 的长期安装方案。
+1. 先启动 OpenDL 桌面应用，让其注册浏览器通信主机。
+2. 在 Firefox 地址栏打开 about:addons，点击齿轮，选择“从文件安装附加组件”。
+3. 选择本文件夹中的 OpenDL-firefox.xpi，确认安装。
+4. 打开普通网页，点击扩展图标，确认连接状态显示已连接。
+
+Firefox 扩展由 Mozilla 签名。更新扩展时需安装新的签名包；桌面应用更新不会自动更新 Firefox 扩展。

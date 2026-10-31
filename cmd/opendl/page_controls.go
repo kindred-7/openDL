@@ -883,6 +883,8 @@ func (pg *mainPage) moveSelectionToQueue(queue string) {
 func (pg *mainPage) openAdd(extract bool) {
 	if !pg.showAdd {
 		pg.dlgKeepExtension = true
+		pg.dlgRememberDir = false
+		pg.dlgDir = pg.saveDir
 		if pg.defaultDirPending {
 			pg.dlgDir = pg.saveDir
 			pg.defaultDirPending = false
@@ -1007,6 +1009,9 @@ func (pg *mainPage) submitDownloads(start bool) {
 	}
 	pg.dlgNow = start
 	pg.addLinks(links, pg.queueID())
+	if pg.dlgRememberDir {
+		pg.setDefaultDirectory(pg.dlgDir)
+	}
 	pg.dlgLinks = ""
 	pg.dlgPassword = ""
 	pg.dlgSHA256, pg.dlgVerifySHA = "", false

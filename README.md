@@ -40,7 +40,9 @@ Chrome 网上应用店版本已提交审核；是否可安装以商店实际状�
 3. 选择“加载已解压的扩展程序”，选择安装目录中的 `extension` 文件夹。
 4. 打开普通网页，点击扩展图标，检查连接状态。
 
-手动加载后请保留扩展文件夹。Firefox 的长期安装需要单独的签名扩展包；具体步骤见安装目录中的说明。
+手动加载后请保留扩展文件夹。Firefox 可从扩展管理页安装安装目录 `extension/OpenDL-firefox.xpi` 中的 Mozilla 签名包；具体步骤见安装目录中的说明。
+
+安装包同时携带 Chrome / Edge 共用扩展和 Firefox 签名扩展。Firefox 扩展更新后，需要将新版本提交 Mozilla 签名，再用新的签名文件替换 `extension/OpenDL-firefox.xpi`；桌面应用版本更新不会自动更新 Firefox 扩展。
 
 ## 快速开始
 
