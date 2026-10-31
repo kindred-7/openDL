@@ -65,6 +65,35 @@ func d1Dark() *d1Palette { return d1AccentPalette(true, "") }
 
 func (p *d1Palette) theme() *ui.Theme { return style.NewAccentRules(p.dark, p.accent).Theme() }
 
+// themePalette blends the two appearances without rebuilding window content.
+func themePalette(dark bool, accent string, amount float32) (*d1Palette, *ui.Theme) {
+	light, night := d1AccentPalette(false, accent), d1AccentPalette(true, accent)
+	p := *light
+	p.dark = dark
+	p.bg, p.fg = light.bg.Mix(night.bg, amount), light.fg.Mix(night.fg, amount)
+	p.mu, p.mu2 = light.mu.Mix(night.mu, amount), light.mu2.Mix(night.mu2, amount)
+	p.bd, p.bd2 = light.bd.Mix(night.bd, amount), light.bd2.Mix(night.bd2, amount)
+	p.card, p.sel = light.card.Mix(night.card, amount), light.sel.Mix(night.sel, amount)
+	p.hover, p.pressed = light.hover.Mix(night.hover, amount), light.pressed.Mix(night.pressed, amount)
+	p.pri, p.onpri = light.pri.Mix(night.pri, amount), light.onpri.Mix(night.onpri, amount)
+	p.brand, p.ok = light.brand.Mix(night.brand, amount), light.ok.Mix(night.ok, amount)
+	p.bad, p.page = light.bad.Mix(night.bad, amount), light.page.Mix(night.page, amount)
+	a, b := light.theme(), night.theme()
+	t := *a
+	t.Dark = dark
+	t.Background, t.Surface = a.Background.Mix(b.Background, amount), a.Surface.Mix(b.Surface, amount)
+	t.SurfaceHover, t.SurfacePressed = a.SurfaceHover.Mix(b.SurfaceHover, amount), a.SurfacePressed.Mix(b.SurfacePressed, amount)
+	t.Border, t.Text = a.Border.Mix(b.Border, amount), a.Text.Mix(b.Text, amount)
+	t.TextMuted, t.Accent = a.TextMuted.Mix(b.TextMuted, amount), a.Accent.Mix(b.Accent, amount)
+	t.AccentHover, t.AccentPressed = a.AccentHover.Mix(b.AccentHover, amount), a.AccentPressed.Mix(b.AccentPressed, amount)
+	t.AccentText, t.Danger = a.AccentText.Mix(b.AccentText, amount), a.Danger.Mix(b.Danger, amount)
+	t.Warning, t.Success = a.Warning.Mix(b.Warning, amount), a.Success.Mix(b.Success, amount)
+	t.Selection, t.Focus = a.Selection.Mix(b.Selection, amount), a.Focus.Mix(b.Focus, amount)
+	t.Inverse, t.InverseText = a.Inverse.Mix(b.Inverse, amount), a.InverseText.Mix(b.InverseText, amount)
+	t.Scrollbar = a.Scrollbar.Mix(b.Scrollbar, amount)
+	return &p, &t
+}
+
 // 状态徽章的着色：一律中性描边，仅“失败”以文字着色提示处理
 // （对模板 design.html 彩色描边徽章的降噪，遵循用户最新要求）。
 func (p *d1Palette) badgeColors(status string) (fg, border ui.Color) {
@@ -207,6 +236,9 @@ type mainPage struct {
 	dateFilter                                               string
 	showTypeMenu                                             bool
 	sortDesc                                                 bool
+	taskScroll                                               ui.ScrollState
+	taskDragID, taskDragName                                 string
+	taskDragPreview                                          []string
 	detailCollapsed                                          bool
 	detailPlacement                                          string
 	searchHandle                                             ui.Handle
@@ -531,8 +563,12 @@ func (pg *mainPage) view(c *ui.Context) {
 		s := c.Services()
 		pg.svc = &s
 	}
-	p := d1AccentPalette(pg.dark, pg.preferences.AccentColor)
-	c.SetTheme(p.theme())
+	c.Key("main-page-layout")
+	root := ui.Column(c).Fill().Font(style.FontFamily).FontSize(style.TextBase).FontWeight(style.WeightRegular).LineHeight(style.LineHeight)
+	themeAmount := root.AnimateWith("theme-crossfade", motionTarget(pg.dark), 240*time.Millisecond, ui.EaseInOut)
+	p, theme := themePalette(pg.dark, pg.preferences.AccentColor, themeAmount)
+	c.SetTheme(theme)
+	root.Background(p.bg)
 
 	if !pg.showDelete && !pg.deleteBusy && !pg.showAdd && !pg.showSource && !pg.showSched && !pg.showAbout && !pg.showExtensionGuide && !pg.showShortcuts && !pg.showDirHistory && !pg.showColumns && !pg.showMenu && !pg.showAppMenu && !pg.showTypeMenu && !pg.showLimitMenu && !pg.showLimit {
 		if pg.shortcutPressed(c, "search") {
@@ -557,8 +593,6 @@ func (pg *mainPage) view(c *ui.Context) {
 		}
 	}
 
-	c.Key("main-page-layout")
-	root := ui.Column(c).Fill().Font(style.FontFamily).FontSize(style.TextBase).FontWeight(style.WeightRegular).LineHeight(style.LineHeight).Background(p.bg)
 	// 整窗接收拖入的链接、文本与链接列表文件。
 	if drop, ok := ui.DropData(root, transfer.DropOptions{
 		Formats:    []transfer.Format{transfer.URIList, transfer.FileList, transfer.Text},
@@ -923,6 +957,24 @@ func (pg *mainPage) visibleRows() []d1Row {
 		}
 		return a < b
 	})
+	order := pg.taskDragPreview
+	if len(order) == 0 && pg.preferences.ManualTaskSort {
+		order = pg.preferences.ManualTaskOrder
+	}
+	if len(order) > 0 {
+		rank := make(map[string]int, len(order))
+		for i, id := range order {
+			rank[id] = i
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			a, aok := rank[out[i].id]
+			b, bok := rank[out[j].id]
+			if aok != bok {
+				return aok
+			}
+			return aok && a < b
+		})
+	}
 	return out
 }
 
@@ -1263,6 +1315,7 @@ func (pg *mainPage) diskStatusControl(c *ui.Context, p *d1Palette) {
 			if i > 0 {
 				ui.Box(c).Width(1).Height(12).Background(p.bd)
 			}
+			c.Key("disk-volume-" + stat.name)
 			ui.Row(c).Gap(6).Shrink(0).AlignItems(ui.Center).Children(func() {
 				label, tip, pct, low := "—", "—", 0, false
 				if stat.total > 0 {
@@ -1283,10 +1336,12 @@ func (pg *mainPage) diskStatusControl(c *ui.Context, p *d1Palette) {
 				ui.Text(c, tr(stat.name)).FontSize(style.TextSM).TextColor(nameColor).SingleLine()
 				ui.Text(c, label).FontSize(style.TextSM).FontWeight(style.WeightMedium).FontFeatures("tnum").
 					TextColor(valueColor).SingleLine().Tooltip(tr(stat.name) + "：" + tip)
-				ui.Box(c).Width(28).Height(4).MarginStart(2).Tooltip(tr(stat.name) + "：" + tip).Draw(func(pnt *ui.Painter, r ui.Rect) {
+				bar := ui.Box(c).Width(28).Height(4).MarginStart(2).Tooltip(tr(stat.name) + "：" + tip)
+				fraction := bar.Animate("disk-used", float32(pct)/100, 500*time.Millisecond)
+				bar.Draw(func(pnt *ui.Painter, r ui.Rect) {
 					pnt.Fill(r, p.bd, 2)
-					if pct > 0 {
-						pnt.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * float32(pct) / 100, H: r.H}, fill, 2)
+					if fraction > 0 {
+						pnt.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * fraction, H: r.H}, fill, 2)
 					}
 				})
 			})
@@ -2152,7 +2207,20 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 			d1StatusText(c, p, fmt.Sprintf(tr("%d 个下载中"), running))
 			d1StatusText(c, p, fmt.Sprintf(tr("%d 个排队"), queued))
 			ui.Row(c).Shrink(0).Gap(6).AlignItems(ui.Center).Children(func() {
-				style.Icon(c, style.IconDownload, 14, p.mu).Shrink(0)
+				wave := ui.Box(c).Size(14, 14).Shrink(0)
+				phase := float32(0)
+				if speed > 0 && !c.Preferences().ReduceMotion {
+					phase = wave.Loop("download-wave", 1200*time.Millisecond, ui.Linear)
+				}
+				wave.Draw(func(painter *ui.Painter, bounds ui.Rect) {
+					for i := 0; i < 3; i++ {
+						height := float32(3)
+						if speed > 0 {
+							height = 4 + 7*float32((math.Sin(float64(phase)*2*math.Pi+float64(i)*1.4)+1)/2)
+						}
+						painter.Fill(ui.Rect{X: bounds.X + 1 + float32(i)*4, Y: bounds.Y + (bounds.H-height)/2, W: 2, H: height}, p.mu, 1)
+					}
+				})
 				speedText := bytesText(speed) + "/s"
 				d1StatusText(c, p, speedText).Tooltip(tr(speedText))
 			})

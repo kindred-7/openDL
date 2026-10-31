@@ -530,11 +530,13 @@ async function browserCookies(msg) {
   return cookiesForTab(msg.tabId, target.href);
 }
 
-async function cookiesForTab(tabId, url) {
+async function cookiesForTab(tabId, url, cookieStoreId = "") {
   const target = new URL(url);
   if (!/^https?:$/.test(target.protocol)) throw new Error(localize("无法获取浏览器登录状态"));
   const stores = await chrome.cookies.getAllCookieStores();
-  const store = stores.find((item) => item.tabIds.includes(tabId));
+  const store = cookieStoreId
+    ? stores.find((item) => item.id === cookieStoreId && (!Number.isInteger(tabId) || tabId < 0 || item.tabIds.includes(tabId)))
+    : stores.find((item) => item.tabIds.includes(tabId));
   if (!store) throw new Error(localize("无法识别当前标签页的 Cookie 存储区"));
   const cookies = await chrome.cookies.getAll({ url: target.href, storeId: store.id });
   const pairs = [];
@@ -643,6 +645,27 @@ async function takeoverEnabled() {
   }
 }
 
+// A running native host can answer ping even when the desktop app is closed.
+// Probe the desktop before interrupting an ordinary browser download.
+async function desktopAvailableForTakeover() {
+  try {
+    if (!(await connect()) || !port || !mediaCapabilities.has("download-prompt")) return false;
+    const activePort = port;
+    const reply = await sendNative(activePort, { type: "desktopStatus" }, false, 5000);
+    return Boolean(reply?.ok && port === activePort);
+  } catch {
+    return false;
+  }
+}
+
+async function startBrowserFallback(url, filename = "") {
+  const options = { url, saveAs: false, conflictAction: "uniquify" };
+  const safeName = fallbackFilename(filename);
+  if (safeName) options.filename = safeName;
+  const id = await chrome.downloads.download(options);
+  return { ok: true, fallback: true, id };
+}
+
 function takeoverExt(url) {
   try {
     const path = new URL(url).pathname;
@@ -675,7 +698,7 @@ chrome.downloads.onCreated.addListener((item) => {
       // Pause immediately while checking the native host, preventing fast
       // transfers from completing during the asynchronous handshake.
       try { await chrome.downloads.pause(item.id); } catch { return; }
-      if (!(await connect()) || !port || !mediaCapabilities.has("download-prompt")) {
+      if (!(await desktopAvailableForTakeover())) {
         try { await chrome.downloads.resume(item.id); } catch {}
         return;
       }
@@ -688,7 +711,16 @@ chrome.downloads.onCreated.addListener((item) => {
       const filename = fallbackFilename(String(fresh.filename || item.filename || "").split(/[\\/]/).pop() || "");
       let title = "", cookie = "";
       try { title = (await chrome.tabs.get(item.tabId))?.title || ""; } catch {}
-      try { cookie = await cookiesForTab(item.tabId, url); } catch {}
+      try { cookie = await cookiesForTab(item.tabId, url, fresh.cookieStoreId || item.cookieStoreId || ""); } catch {}
+      // GitHub Actions artifacts require a signed-in browser session. If its
+      // cookie store cannot be identified, keep the original browser download
+      // rather than sending an unauthenticated request that returns 404.
+      const source = new URL(url);
+      if (!cookie && source.hostname.toLowerCase() === "github.com" &&
+          /^\/[^/]+\/[^/]+\/actions\/runs\/\d+\/artifacts\/\d+\/?$/.test(source.pathname)) {
+        try { await chrome.downloads.resume(item.id); } catch {}
+        return;
+      }
       try { await chrome.downloads.cancel(item.id); } catch {
         try { await chrome.downloads.resume(item.id); } catch {}
         return;
@@ -718,7 +750,7 @@ chrome.downloads.onCreated.addListener((item) => {
       if (reply?.deliveryUnknown) return;
       // Hand the download back to the browser rather than losing it.
       try {
-        await chrome.downloads.download({ url, saveAs: false, conflictAction: "uniquify" });
+        await startBrowserFallback(url);
       } catch {}
     } catch {}
   })();
@@ -729,12 +761,25 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       typeof msg.url === "string" && msg.url.length <= 4096 && /^https?:/i.test(msg.url)) {
     const tabId = sender.tab.id;
     (async () => {
+      const payload = { type: "prompt", url: msg.url,
+        pageUrl: String(msg.pageUrl || "").slice(0, 4096), title: String(msg.title || "").slice(0, 1024),
+        filename: fallbackFilename(msg.filename), mediaMode: "", mediaQuality: "", queue: "" };
+      if (!(await desktopAvailableForTakeover())) {
+        const guarded = await guardBrowserFallback({ ok: false, unavailable: true }, payload, tabId);
+        if (guarded?.deliveryUnknown || !guarded?.unavailable) return guarded;
+        try { return await startBrowserFallback(msg.url, payload.filename); }
+        catch (e) { return { ok: false, reason: String(e) }; }
+      }
       let cookie = "";
       try { cookie = await cookiesForTab(tabId, msg.url); } catch {}
-      return sendToDesktop({ type: "prompt", url: msg.url,
-        pageUrl: String(msg.pageUrl || "").slice(0, 4096), title: String(msg.title || "").slice(0, 1024),
-        filename: fallbackFilename(msg.filename), mediaMode: "", mediaQuality: "", queue: "", cookie },
+      payload.cookie = cookie;
+      const reply = await sendToDesktop(payload,
         { tabId, url: msg.url, pageUrl: msg.pageUrl || "", queue: "", useBrowserCookies: false });
+      if (reply?.unavailable && !reply.deliveryUnknown) {
+        try { return await startBrowserFallback(msg.url, payload.filename); }
+        catch (e) { return { ok: false, reason: String(e) }; }
+      }
+      return reply;
     })().then(sendResponse, () => sendResponse({ ok: false, deliveryUnknown: true, reason: localize("无法确认任务是否已发送，请检查下载列表") }));
     return true;
   }

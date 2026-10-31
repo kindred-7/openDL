@@ -19,32 +19,40 @@
   <div id="login-warning" class="login-warning" role="status" aria-live="polite"></div>
   <main>
     <section id="panel-resources" class="panel" aria-label="资源" tabindex="0">
-      <div class="bar"><button id="dl-selected" disabled>下载所选</button><button id="dl-all">下载全部</button><button id="rescan-footer" class="icon-btn bar-rescan" title="重新扫描" aria-label="重新扫描"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg></button></div>
+      <div class="resource-toolbar">
+        <div class="resource-search"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></svg><input id="resource-search" type="search" placeholder="搜索资源名称或链接" aria-label="搜索资源名称或链接" autocomplete="off" /></div>
+        <button id="rescan-footer" class="icon-btn resource-rescan" title="重新扫描" aria-label="重新扫描"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /></svg></button>
+      </div>
       <div id="list"></div>
       <div id="empty" class="empty">当前页面暂未嗅探到资源</div>
     </section>
     <section id="panel-settings" class="panel hidden" aria-labelledby="settings-heading">
       <h2><button id="settings-back" class="settings-back" type="button"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg><span id="settings-heading">设置</span></button></h2>
-      <label class="settings-option" for="hover-download"><span><strong>页面悬浮下载按钮</strong></span><input id="hover-download" type="checkbox" /></label>
-      <label class="settings-option" for="browser-login">
-        <span><strong>使用浏览器登录状态</strong></span>
-        <input id="browser-login" type="checkbox" disabled />
-      </label>
-      <label class="settings-document" for="sniff-formats"><strong>自定义嗅探格式</strong>
+      <div class="settings-toggles">
+        <label class="settings-option" for="hover-download"><strong>页面悬浮下载按钮</strong><input id="hover-download" type="checkbox" /></label>
+        <label class="settings-option" for="browser-login"><strong>使用浏览器登录状态</strong><input id="browser-login" type="checkbox" disabled /></label>
+        <p id="settings-status" class="settings-status settings-group-status" role="status" aria-live="polite"></p>
+        <button id="settings-retry" class="settings-retry hidden" type="button">重试读取设置</button>
+      </div>
+      <div class="settings-document">
+        <label for="sniff-formats"><strong>自定义嗅探格式</strong></label>
         <input id="sniff-formats" type="text" placeholder="例如：mobi, epub, psd" aria-describedby="sniff-formats-hint sniff-formats-status" disabled />
-      </label>
-      <p id="sniff-formats-hint" class="settings-hint">在默认格式之外添加扩展名，以逗号或空格分隔；不影响浏览器下载接管。</p>
-      <p id="sniff-formats-status" class="settings-status" role="status" aria-live="polite"></p>
-      <button id="sniff-formats-save" type="button" disabled>保存嗅探格式</button>
-      <button id="sniff-formats-retry" class="hidden" type="button">重试读取嗅探设置</button>
-      <label class="settings-document" for="inline-formats"><strong>在线文档格式</strong>
+        <p id="sniff-formats-hint" class="settings-hint">追加格式，用逗号或空格分隔；不影响下载接管。</p>
+        <p id="sniff-formats-status" class="settings-status" role="status" aria-live="polite"></p>
+        <div class="settings-actions">
+          <button id="sniff-formats-save" class="settings-save" type="button" disabled>保存嗅探格式</button>
+          <button id="sniff-formats-retry" class="settings-retry hidden" type="button">重试读取嗅探设置</button>
+        </div>
+      </div>
+      <div class="settings-document">
+        <label for="inline-formats"><strong>在线文档格式</strong></label>
         <input id="inline-formats" type="text" aria-describedby="inline-formats-status" disabled />
-      </label>
-      <p id="inline-formats-status" class="settings-status" role="status" aria-live="polite"></p>
-      <button id="inline-formats-retry" class="hidden" type="button">重试读取文档设置</button>
-      <button id="inline-formats-save-retry" class="hidden" type="button">重试保存文档设置</button>
-      <p id="settings-status" class="settings-status" role="status" aria-live="polite"></p>
-      <button id="settings-retry" class="hidden" type="button">重试读取设置</button>
+        <p id="inline-formats-status" class="settings-status" role="status" aria-live="polite"></p>
+        <div class="settings-actions">
+          <button id="inline-formats-retry" class="settings-retry hidden" type="button">重试读取文档设置</button>
+          <button id="inline-formats-save-retry" class="settings-retry hidden" type="button">重试保存文档设置</button>
+        </div>
+      </div>
     </section>
   </main>
   <footer class="footer">
@@ -52,13 +60,9 @@
       <button id="open-settings" class="icon-btn" title="设置" aria-label="设置" aria-controls="panel-settings" aria-expanded="false">
         <svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" /><path d="M19.4 13.5a7.8 7.8 0 0 0 0-3l2-1.5-2-3.5-2.3.9a7.7 7.7 0 0 0-2.6-1.5L14 2h-4l-.5 2.9a7.7 7.7 0 0 0-2.6 1.5l-2.3-.9-2 3.5 2 1.5a7.8 7.8 0 0 0 0 3l-2 1.5 2 3.5 2.3-.9a7.7 7.7 0 0 0 2.6 1.5L10 22h4l.5-2.9a7.7 7.7 0 0 0 2.6-1.5l2.3.9 2-3.5-2-1.5Z" /></svg>
       </button>
-    </div>
-    <div class="footer-center">
       <span id="connection" class="conn" data-state="checking" role="status" aria-live="polite"><svg class="i conn-plug" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22v-5" /><path d="M15 8V2" /><path d="M17 8a1 1 0 0 1 1 1v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1z" /><path d="M9 8V2" /></svg><svg class="i conn-unplug" viewBox="0 0 24 24" aria-hidden="true"><path d="m19 5 3-3" /><path d="m2 22 3-3" /><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z" /><path d="M7.5 13.5 10 11" /><path d="M10.5 16.5 13 14" /><path d="m12 6 6 6 2.3-2.3a2.4 2.4 0 0 0 0-3.4l-2.6-2.6a2.4 2.4 0 0 0-3.4 0Z" /></svg><span class="conn-text">正在检测桌面端…</span></span>
     </div>
-    <div class="footer-right">
-      <span id="download-count" class="count" title="已发送下载数"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3" /><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /></svg><span id="count-value">0</span></span>
-    </div>
+    <div id="footer-actions" class="footer-actions"><button id="dl-selected" disabled>下载所选</button><button id="dl-all">下载全部</button></div>
   </footer>
   <script src="i18n.js"></script>
   <script src="resources.js"></script>

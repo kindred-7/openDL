@@ -41,7 +41,7 @@ type taskColumnView struct {
 	width float32
 }
 
-const rowActionsWidth = 3 * style.SizeIconButton
+const rowActionsWidth = 4 * style.SizeIconButton
 
 func taskColumnByID(id string) (taskColumnSpec, bool) {
 	for _, spec := range taskColumns {
@@ -133,7 +133,11 @@ func (pg *mainPage) visibleColumns(c *ui.Context) []taskColumnView {
 		for i, column := range views {
 			minimumWidth := column.spec.minimum
 			if i == len(views)-1 {
-				minimumWidth = max(minimumWidth, rowActionsWidth)
+				required := float32(rowActionsWidth)
+				if column.spec.id == "name" {
+					required += 38
+				}
+				minimumWidth = max(minimumWidth, required)
 			}
 			minimum += minimumWidth
 			if column.spec.id != "name" && (lowest < 0 || column.spec.priority < views[lowest].spec.priority) {
@@ -147,7 +151,11 @@ func (pg *mainPage) visibleColumns(c *ui.Context) []taskColumnView {
 	}
 	if len(views) > 0 {
 		last := &views[len(views)-1]
-		last.spec.minimum = max(last.spec.minimum, rowActionsWidth)
+		required := float32(rowActionsWidth)
+		if last.spec.id == "name" {
+			required += 38
+		}
+		last.spec.minimum = max(last.spec.minimum, required)
 		last.width = max(last.width, last.spec.minimum)
 	}
 	available := max(float32(1), budget-float32(max(0, len(views)-1))*style.TaskTable.Gap)

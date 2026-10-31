@@ -26,7 +26,7 @@ type settingsPage struct {
 	navList                                                ui.Handle
 	navRows                                                [5]ui.Handle
 	sidebarWidth                                           float32
-	theme, connections, maxconn, detail                    string
+	theme, connections, maxconn, taskConcurrency, detail   string
 	language                                               string
 	directory, rate, schedule                              string
 	scheduleTime                                           time.Time
@@ -149,6 +149,7 @@ var settingsEntries = []settingsEntry{
 	{"min-tray-start", "常规", "启动时最小化到托盘", "启动后主窗口不显示，驻留托盘，可从托盘重新打开。", "托盘 启动 最小化 隐藏 驻留 tray start"},
 	{"min-tray-close", "常规", "关闭时最小化到托盘", "关闭主窗口后驻留托盘继续运行，可从托盘重新打开或退出。", "托盘 关闭 最小化 后台 运行 驻留 tray close background"},
 	{"directory", "下载", "默认保存位置", "新下载默认保存到此文件夹，已有任务不受影响。", "目录 路径 文件夹 保存"},
+	{"task-concurrency", "下载", "同时下载任务数", "所有队列同时下载的任务上限；调低时不会中断正在下载的任务。", "并发 任务 队列 同时 下载 上限"},
 	{"connections", "下载", "默认连接数", "新任务默认使用的连接数，可在添加下载时单独调整。", "分段 连接 数量"},
 	{"max-connections", "下载", "最大连接数", "所有任务合计的连接数上限，0 表示无限制。", "连接 上限 并发 全局"},
 	{"unverified-resume", "下载", "允许未校验续传", "没有 SHA-256 时，允许在无法确认文件一致的情况下保留已下载分段；文件可能损坏。", "续传 分段 校验 风险 SHA-256"},
@@ -194,7 +195,7 @@ var settingsGroups = []settingsGroup{
 	{"面板", "界面", []string{"detail", "reset-layout"}},
 	{"键盘快捷键", "界面", []string{"shortcuts"}},
 
-	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "file-exists", "connections", "max-connections", "unverified-resume"}},
+	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "file-exists", "task-concurrency", "connections", "max-connections", "unverified-resume"}},
 	{"速度与流量", "下载", []string{"speed", "traffic-quota"}},
 	{"媒体合并程序", "下载", []string{"media-mux"}},
 	{"分类保存目录", "下载", []string{"category-dirs"}},
@@ -386,6 +387,7 @@ func (pg *mainPage) openSettings() {
 	s.syncUpdateDraft()
 	s.mediaMuxDraft = pg.preferences.MediaMuxProgram
 	s.siteRulesDraft, s.siteRulesError = pg.preferences.SiteRulesURL, ""
+	s.taskConcurrency = strconv.Itoa(pg.preferences.TaskConcurrency)
 	s.connections = strconv.Itoa(pg.preferences.Connections)
 	s.maxconn = strconv.Itoa(pg.preferences.MaxConnections)
 	s.autoStart = autoStartEnabled()
@@ -420,6 +422,7 @@ func (pg *mainPage) refreshSettingsWindow() {
 	s.theme = pg.selectedThemeMode()
 	s.language = i18n.Locale()
 	s.syncUpdateDraft()
+	s.taskConcurrency = strconv.Itoa(pg.preferences.TaskConcurrency)
 	s.connections = strconv.Itoa(pg.preferences.Connections)
 	s.maxconn = strconv.Itoa(pg.preferences.MaxConnections)
 	s.autoStart = autoStartEnabled()
@@ -1248,8 +1251,20 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "file-exists":
 					d1Choice(c, p, "文件已存在时", &s.owner.preferences.FileExistsAction, []d1Option{{value: "", label: "覆盖原文件"}, {value: "copy", label: "创建副本"}}).
 						Width(settingsControlWidth).Shrink(0).OnChange(func() {
-							s.owner.mgr.SetOverwriteExisting(s.owner.preferences.FileExistsAction != "copy")
-							s.owner.saveAppPreferences()
+						s.owner.mgr.SetOverwriteExisting(s.owner.preferences.FileExistsAction != "copy")
+						s.owner.saveAppPreferences()
+						s.changed()
+					})
+				case "task-concurrency":
+					options := make([]d1Option, 0, maxTaskConcurrency)
+					for n := 1; n <= maxTaskConcurrency; n++ {
+						value := strconv.Itoa(n)
+						options = append(options, d1Option{value: value, label: value})
+					}
+					d1Choice(c, p, "同时下载任务数", &s.taskConcurrency, options).Width(settingsControlWidth).Shrink(0).
+						OnChange(func() {
+							value, _ := strconv.Atoi(s.taskConcurrency)
+							s.owner.setTaskConcurrency(value)
 							s.changed()
 						})
 				case "connections":

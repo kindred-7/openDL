@@ -1,7 +1,7 @@
 {
   "m_sniff_formats": { "message": "Custom resource formats" },
   "m_sniff_formats_placeholder": { "message": "For example: mobi, epub, psd" },
-  "m_sniff_formats_hint": { "message": "Add extensions to the defaults, separated by commas or spaces. Browser download interception is unchanged." },
+  "m_sniff_formats_hint": { "message": "Add formats separated by commas or spaces; download takeover is unchanged." },
   "m_sniff_formats_save": { "message": "Save resource formats" },
   "m_sniff_formats_retry": { "message": "Retry loading formats" },
   "m_sniff_formats_read_failed": { "message": "Could not load resource formats" },
@@ -395,6 +395,8 @@
   "m_copy_failed": {
     "message": "Could not copy link"
   },
+  "m_search_resources": { "message": "Search names or links" },
+  "m_no_matching_resources": { "message": "No matching resources" },
   "m_capture_cookie_failed": {
     "message": "Could not obtain browser cookies. Retry from the extension resource list."
   }

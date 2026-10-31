@@ -813,7 +813,7 @@ func main() {
 	preferences := loadAppPreferences()
 	i18n.Set(preferences.Language)
 	dir := preferences.Directory
-	mgr := download.NewManager(dir, 3, preferences.Connections)
+	mgr := download.NewManager(dir, preferences.TaskConcurrency, preferences.Connections)
 	mgr.SetMediaMuxProgram(preferences.MediaMuxProgram)
 	mgr.SetRateLimit(int64(preferences.RateMBps * float64(1<<20)))
 	mgr.SetMaxConnections(preferences.MaxConnections)

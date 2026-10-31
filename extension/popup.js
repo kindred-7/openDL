@@ -7,10 +7,6 @@ const MEDIA_EXT = globalThis.openDLResourceTypes.media;
 
 const statusEl = document.getElementById("status");
 const connectionEl = document.getElementById("connection");
-const countEl = document.getElementById("count-value");
-let sentTotal = 0;
-// footer 只保留左侧一排时计数元素可能不存在，计数仅作内部统计。
-const markSent = () => { sentTotal++; if (countEl) countEl.textContent = String(sentTotal); };
 const connectionLabel = connectionEl.querySelector(".conn-text");
 const setConnectionText = (text) => { connectionLabel.textContent = text; };
 const themeStorageKey = "opendl-desktop-theme";
@@ -68,6 +64,7 @@ refreshConnection();
 setInterval(refreshConnection, 2000);
 const listEl = document.getElementById("list");
 const emptyEl = document.getElementById("empty");
+const resourceSearch = document.getElementById("resource-search");
 const takeoverOption = document.getElementById("takeover-input");
 const loginOption = document.getElementById("browser-login");
 const settingsStatus = document.getElementById("settings-status");
@@ -110,9 +107,11 @@ function updateControls() {
   takeoverOption.disabled = batchBusy || singleBusy > 0;
   document.getElementById("rescan-footer").disabled = scanBusy || batchBusy || singleBusy > 0;
   document.getElementById("dl-all").disabled = blocked;
+  resourceSearch.disabled = batchBusy || singleBusy > 0;
   const chosen = document.getElementById("dl-selected");
-  chosen.disabled = blocked || pageStale || selected.size === 0;
-  chosen.textContent = selected.size ? localize("下载所选 (%s)", selected.size) : localize("下载所选");
+  const selectedVisible = matchingResources().filter((item) => selected.has(item.url)).length;
+  chosen.disabled = blocked || pageStale || selectedVisible === 0;
+  chosen.textContent = selectedVisible ? localize("下载所选 (%s)", selectedVisible) : localize("下载所选");
   for (const input of listEl.querySelectorAll("input")) input.disabled = blocked || pageStale || sentURLs.has(input.dataset.url) || uncertainURLs.has(input.dataset.url);
   for (const button of listEl.querySelectorAll("button")) {
     if (button.dataset.copy === "true") continue;
@@ -471,6 +470,26 @@ function resourceName(item) {
   return localize("未命名资源");
 }
 
+function matchingResources() {
+  const query = resourceSearch.value.trim().toLocaleLowerCase();
+  if (!query) return currentResources;
+  return currentResources.filter((item) =>
+    [resourceName(item), item.url, item.ext, item.text].some((value) => String(value || "").toLocaleLowerCase().includes(query)));
+}
+
+function renderResourceList(showEmpty = true) {
+  const visible = matchingResources();
+  listEl.replaceChildren(...visible.map(row));
+  emptyEl.textContent = currentResources.length && resourceSearch.value.trim()
+    ? localize("没有匹配的资源") : localize("当前页面暂未嗅探到资源");
+  emptyEl.classList.toggle("hidden", !showEmpty || visible.length > 0);
+}
+
+resourceSearch.addEventListener("input", () => {
+  renderResourceList(!scanBusy && !pageStale);
+  updateControls();
+});
+
 function row(item) {
   const div = document.createElement("div");
   div.className = "row";
@@ -535,7 +554,6 @@ function row(item) {
         action.setAttribute("aria-label", action.textContent + " " + resourceName(item));
         action.dataset.finished = "true";
         sentURLs.add(key);
-        markSent();
         if (!mediaMode) {
           selected.delete(item.url);
           checkbox.checked = false;
@@ -638,8 +656,7 @@ async function render(forceRules = false) {
       displayedDocument = documentKey;
       displayedTabId = tabId;
       currentResources = resources;
-      emptyEl.classList.add("hidden");
-      listEl.replaceChildren(...resources.map(row));
+      renderResourceList(false);
       updateControls();
     });
   } catch {
@@ -663,12 +680,9 @@ async function render(forceRules = false) {
   currentResources = resources;
   const visible = new Set(resources.map((item) => item.url));
   for (const url of selected) if (!visible.has(url)) selected.delete(url);
-  listEl.textContent = "";
   const silentError = error === localize("无法读取当前标签页");
-  const empty = (!error || silentError) && resources.length === 0;
-  emptyEl.classList.toggle("hidden", !empty);
   statusEl.textContent = silentError ? "" : (error || "");
-  for (const item of resources) listEl.appendChild(row(item));
+  renderResourceList(!error || silentError);
   updateControls();
 }
 
@@ -689,7 +703,6 @@ async function downloadBatch(resources, partialScan) {
         else sent++;
         sentURLs.add(item.url);
         selected.delete(item.url);
-        markSent();
         const button = rows.get(item.url)?.querySelector('button[data-mode="file"]');
         if (button) {
           button.textContent = localize("再次下载");
@@ -735,7 +748,7 @@ async function runBatch(getResources) {
 }
 
 document.getElementById("dl-selected").addEventListener("click", () => {
-  runBatch(async () => ({ resources: currentResources.filter((item) => selected.has(item.url)) }));
+  runBatch(async () => ({ resources: matchingResources().filter((item) => selected.has(item.url)) }));
 });
 
 document.getElementById("dl-all").addEventListener("click", () => {
@@ -749,9 +762,11 @@ document.getElementById("dl-all").addEventListener("click", () => {
 const panelResources = document.getElementById("panel-resources");
 const panelSettings = document.getElementById("panel-settings");
 const settingsButton = document.getElementById("open-settings");
+const footerActions = document.getElementById("footer-actions");
 function showResources() {
   panelSettings.classList.add("hidden");
   panelResources.classList.remove("hidden");
+  footerActions.hidden = false;
   settingsButton.setAttribute("aria-expanded", "false");
 }
 
@@ -763,6 +778,7 @@ settingsButton.addEventListener("click", () => {
   }
   panelResources.classList.add("hidden");
   panelSettings.classList.remove("hidden");
+  footerActions.hidden = true;
   settingsButton.setAttribute("aria-expanded", "true");
   document.getElementById("settings-back").focus();
 });

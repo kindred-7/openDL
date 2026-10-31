@@ -221,6 +221,11 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 				if errors.As(err, &unsupported) {
 					return map[string]any{"ok": false, "code": "desktop_unsupported", "reason": err.Error()}
 				}
+				// Capability checks happen before posting the download request.
+				// A refused connection means the browser can safely take over.
+				if errors.Is(err, syscall.ECONNREFUSED) {
+					return map[string]any{"ok": false, "unavailable": true, "reason": err.Error()}
+				}
 				return map[string]any{"ok": false, "reason": err.Error()}
 			}
 		}

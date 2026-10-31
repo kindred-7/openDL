@@ -29,6 +29,18 @@
 
   // A single isolated overlay avoids modifying a site's link or layout.
   let hoverEnabled = false, hoverLink = null, hoverHref = "", hoverTimer = 0, hoverHost = null, hoverControl = null, hoverRevision = 0, hoverSettingRevision = 0;
+  let scanObserver = null;
+  function contextActive() {
+    try { if (chrome.runtime?.id) return true; } catch {}
+    hoverEnabled = false;
+    clearTimeout(hoverTimer);
+    if (hoverHost) hoverHost.remove();
+    if (scanObserver) scanObserver.disconnect();
+    return false;
+  }
+  function extensionMessage(key) {
+    try { return chrome.i18n.getMessage(key); } catch { contextActive(); return ""; }
+  }
   const uncertainHoverURLs = new Set();
   const sendingHoverURLs = new Set();
   chrome.storage.local.get({ "opendl-hover-download": true }).then((s) => { if (!hoverSettingRevision) hoverEnabled = s["opendl-hover-download"] !== false; }).catch(() => { if (!hoverSettingRevision) hoverEnabled = true; });
@@ -61,7 +73,7 @@
     const button = document.createElement("button");
     hoverControl = button;
     button.type = "button";
-    button.title = chrome.i18n.getMessage("m_context_download");
+    button.title = extensionMessage("m_context_download");
     button.setAttribute("aria-label", button.title);
     button.style.cssText = "width:32px;height:32px;display:grid;place-items:center;border:1px solid rgba(128,128,128,.25);border-radius:8px;background:rgba(30,30,32,.88);color:white;box-shadow:0 3px 12px #0004;cursor:pointer;font:18px system-ui;backdrop-filter:blur(8px)";
     const feedback = document.createElement("div");
@@ -71,6 +83,7 @@
     feedback.hidden = true;
     resetHoverIcon(button);
     button.addEventListener("click", async (event) => {
+      if (!contextActive()) return;
       event.preventDefault(); event.stopPropagation();
       const link = hoverLink;
       if (!link || !link.isConnected || link.href !== hoverHref) { hoverHost.hidden = true; return; }
@@ -87,14 +100,15 @@
         const reply = await chrome.runtime.sendMessage({ type: "prompt", url, pageUrl, title, filename, useBrowserCookies: stored["opendl-use-browser-cookies"] === true });
         if (!reply || reply.deliveryUnknown) uncertainHoverURLs.add(url);
         if (revision !== hoverRevision || !link.isConnected || link.href !== url) return;
-        if (!reply?.ok) { button.title = reply?.reason || chrome.i18n.getMessage(reply?.deliveryUnknown || !reply ? "m_hover_uncertain" : "m_hover_failed"); button.textContent = "!"; }
-        else { button.title = chrome.i18n.getMessage("m_hover_sent"); button.textContent = "✓"; }
+        if (!reply?.ok) { button.title = reply?.reason || extensionMessage(reply?.deliveryUnknown || !reply ? "m_hover_uncertain" : "m_hover_failed"); button.textContent = "!"; }
+        else { button.title = extensionMessage("m_hover_sent"); button.textContent = "✓"; }
         button.setAttribute("aria-label", button.title);
         feedback.textContent = button.title;
         feedback.hidden = false;
       } catch {
+        if (!contextActive()) return;
         if (sent) uncertainHoverURLs.add(url);
-        if (revision === hoverRevision && link.isConnected && link.href === url) { button.title = chrome.i18n.getMessage(sent ? "m_hover_uncertain" : "m_hover_failed"); button.setAttribute("aria-label", button.title); button.textContent = "!"; feedback.textContent = button.title; feedback.hidden = false; }
+        if (revision === hoverRevision && link.isConnected && link.href === url) { button.title = extensionMessage(sent ? "m_hover_uncertain" : "m_hover_failed"); button.setAttribute("aria-label", button.title); button.textContent = "!"; feedback.textContent = button.title; feedback.hidden = false; }
       }
       finally { sendingHoverURLs.delete(url); button.disabled = uncertainHoverURLs.has(hoverHref) || sendingHoverURLs.has(hoverHref); }
     });
@@ -105,16 +119,16 @@
     return hoverHost;
   }
   function showHover(link) {
-    if (!hoverEnabled || !link.isConnected || !link.matches(":hover")) return;
+    if (!contextActive() || !hoverEnabled || !link.isConnected || !link.matches(":hover")) return;
     const changed = hoverLink !== link || hoverHref !== link.href;
     hoverLink = link;
     hoverHref = link.href;
     clearTimeout(hoverTimer);
     const host = hoverButton(), bounds = link.getBoundingClientRect();
-    if (changed) { hoverRevision++; resetHoverIcon(hoverControl); hoverControl.title = chrome.i18n.getMessage("m_context_download"); hoverControl.setAttribute("aria-label", hoverControl.title); hoverControl.nextElementSibling.hidden = true; }
+    if (changed) { hoverRevision++; resetHoverIcon(hoverControl); hoverControl.title = extensionMessage("m_context_download"); hoverControl.setAttribute("aria-label", hoverControl.title); hoverControl.nextElementSibling.hidden = true; }
     if (uncertainHoverURLs.has(hoverHref)) {
       hoverControl.disabled = true;
-      hoverControl.title = chrome.i18n.getMessage("m_hover_uncertain");
+      hoverControl.title = extensionMessage("m_hover_uncertain");
       hoverControl.setAttribute("aria-label", hoverControl.title);
       hoverControl.textContent = "!";
       hoverControl.nextElementSibling.textContent = hoverControl.title;
@@ -133,7 +147,7 @@
   }
   let pendingHoverLookup = null;
   document.addEventListener("mouseover", (event) => {
-    if (!hoverEnabled || !(event.target instanceof Element)) return;
+    if (!contextActive() || !hoverEnabled || !(event.target instanceof Element)) return;
     const link = event.target.closest("a[href]");
     if (!link || !/^https?:/i.test(link.href)) return;
     const resource = resources.get(link.href);
@@ -148,9 +162,14 @@
     if (pendingHoverLookup?.link === link && pendingHoverLookup.url === url) return;
     const pending = { link, url };
     pendingHoverLookup = pending;
-    chrome.runtime.sendMessage({ type: "hoverMediaLookup", url }).then((reply) => {
-      if (pendingHoverLookup === pending && reply?.media && link.href === url) showHover(link);
-    }).catch(() => {}).finally(() => { if (pendingHoverLookup === pending) pendingHoverLookup = null; });
+    try {
+      chrome.runtime.sendMessage({ type: "hoverMediaLookup", url }).then((reply) => {
+        if (pendingHoverLookup === pending && reply?.media && link.href === url) showHover(link);
+      }).catch(() => {}).finally(() => { if (pendingHoverLookup === pending) pendingHoverLookup = null; });
+    } catch {
+      pendingHoverLookup = null;
+      contextActive();
+    }
   }, true);
   document.addEventListener("mouseout", (event) => {
     if (hoverLink && event.target instanceof Node && hoverLink.contains(event.target) && !hoverLink.contains(event.relatedTarget)) {
@@ -235,7 +254,7 @@
       const timer = setTimeout(() => finish(null), force ? 6000 : 300);
       try {
         chrome.runtime.sendMessage({ type: "siteRules", refresh: Boolean(force) }, (reply) => {
-          void chrome.runtime.lastError;
+          try { void chrome.runtime.lastError; } catch {}
           finish(reply && reply.rules, Boolean(reply?.fresh));
         });
       } catch {
@@ -274,7 +293,7 @@
     if (badgeTimer) return;
     badgeTimer = setTimeout(() => {
       badgeTimer = null;
-      try { chrome.runtime.sendMessage({ type: "resourcesChanged" }, () => { void chrome.runtime.lastError; }); } catch {}
+      try { chrome.runtime.sendMessage({ type: "resourcesChanged" }, () => { try { void chrome.runtime.lastError; } catch {} }); } catch {}
     }, 80);
   };
   // Several passes can see one address; the strongest classification wins.
@@ -460,7 +479,8 @@
     }, 80);
   };
 
-  new MutationObserver((muts) => {
+  scanObserver = new MutationObserver((muts) => {
+    if (!contextActive()) return;
     for (const m of muts) {
       if (m.type === "attributes") {
         scheduleScan(m.target);
@@ -473,7 +493,8 @@
         }
       }
     }
-  }).observe(document.documentElement, {
+  });
+  scanObserver.observe(document.documentElement, {
     childList: true, subtree: true, characterData: true, attributes: true,
     attributeFilter: ["src", "href", "data", "srcset", "download"]
   });
@@ -501,26 +522,27 @@
     "click",
     (event) => {
       try {
-        if (event.button !== 0 || event.defaultPrevented) return;
+        if (!contextActive() || event.button !== 0 || event.defaultPrevented) return;
         const anchor = event.target && event.target.closest ? event.target.closest("a[href]") : null;
         if (!anchor) return;
         const url = anchor.href;
         if (!/^https?:/i.test(url) || url.length > 4096) return;
         if (event.shiftKey) {
-          chrome.runtime.sendMessage({ type: "releaseDownload", url });
+          chrome.runtime.sendMessage({ type: "releaseDownload", url }).catch(() => {});
           return;
         }
         if (!event.isTrusted || event.ctrlKey || event.metaKey) return;
         const matches = anchor.hasAttribute("download") || DOWNLOAD_EXT.has(extOf(url)) || Boolean(matchSiteRule(url));
         if (!event.altKey && (!clickTakeoverEnabled || !matches)) return;
-        event.preventDefault();
-        event.stopImmediatePropagation();
-        chrome.runtime.sendMessage({
+        const request = chrome.runtime.sendMessage({
           type: "takeoverLink", url, pageUrl: location.href,
           title: document.title || "", filename: anchor.getAttribute("download") || ""
-        }).then((reply) => {
-          if (!reply?.ok) window.alert(reply?.reason || chrome.i18n.getMessage("m_hover_uncertain"));
-        }).catch(() => window.alert(chrome.i18n.getMessage("m_hover_uncertain")));
+        });
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        request.then((reply) => {
+          if (!reply?.ok && contextActive()) window.alert(reply?.reason || extensionMessage("m_hover_uncertain"));
+        }).catch(() => { if (contextActive()) window.alert(extensionMessage("m_hover_uncertain")); });
       } catch {}
     },
     true

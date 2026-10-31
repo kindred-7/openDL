@@ -2,7 +2,9 @@ package main
 
 import (
 	"os"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"openDL/download"
@@ -12,11 +14,91 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
+// Task order is separate from the download manager: moving a row must never
+// restart a transfer or replace its identity.
+type taskDrag struct{ id string }
+type taskDragFrame struct {
+	active               bool
+	source, name, target string
+	after, over, dropped bool
+}
+
+func (pg *mainPage) taskOrder() []string {
+	rows := pg.allRows()
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := strings.ToLower(rows[i].rowName()), strings.ToLower(rows[j].rowName())
+		if a == b {
+			return rows[i].id < rows[j].id
+		}
+		if pg.sortDesc {
+			return a > b
+		}
+		return a < b
+	})
+	order := pg.preferences.ManualTaskOrder
+	if len(pg.taskDragPreview) > 0 {
+		order = pg.taskDragPreview
+	} else if !pg.preferences.ManualTaskSort {
+		order = nil
+	}
+	rank := make(map[string]int, len(order))
+	for i, id := range order {
+		rank[id] = i
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, aok := rank[rows[i].id]
+		b, bok := rank[rows[j].id]
+		if aok != bok {
+			return aok
+		}
+		return aok && a < b
+	})
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.id)
+	}
+	return ids
+}
+
+func moveTaskOrder(order []string, source, target string, after bool) []string {
+	if source == target {
+		return nil
+	}
+	sourceIndex, targetIndex := -1, -1
+	for i, id := range order {
+		if id == source {
+			sourceIndex = i
+		}
+		if id == target {
+			targetIndex = i
+		}
+	}
+	if sourceIndex < 0 || targetIndex < 0 {
+		return nil
+	}
+	result := make([]string, 0, len(order))
+	for _, id := range order {
+		if id == source {
+			continue
+		}
+		if id == target && !after {
+			result = append(result, source)
+		}
+		result = append(result, id)
+		if id == target && after {
+			result = append(result, source)
+		}
+	}
+	return result
+}
+
 func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
 	columns := pg.visibleColumns(c)
 	ui.Column(c).Grow(1).Shrink(1).Basis(0).FillWidth().Clip().Role(ui.RoleTable).Label(tr("下载任务")).Bind(&pg.tableHandle).Children(func() {
 		pg.tableHead(c, p, rows, columns)
 		if len(rows) == 0 {
+			pg.taskDragID, pg.taskDragName = "", ""
+			pg.taskDragPreview = nil
 			ui.Column(c).Grow(1).Shrink(1).Basis(0).Center().Gap(8).Children(func() {
 				ui.Text(c, tr(pg.emptyTitle())).FontSize(style.TextBase).TextColor(p.fg)
 				ui.Text(c, tr(pg.emptyHint())).FontSize(style.TextSM).TextColor(p.mu)
@@ -27,11 +109,142 @@ func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
 		// The scroll surface receives clicks only where no row or row action
 		// handles them, so blank space clears the existing selection.
 		c.Key("task-table-scroll")
-		ui.Scroll(c).Grow(1).Shrink(1).Basis(0).FillWidth().OnClick(pg.clearTableSelection).Children(func() {
+		drag := taskDragFrame{}
+		scroll := ui.Scroll(c).Grow(1).Shrink(1).Basis(0).FillWidth().TrackScroll(&pg.taskScroll).OnClick(pg.clearTableSelection)
+		_, pointerY, overScroll := scroll.PointerPosition()
+		// MyGo scrolls value drags near the edge itself. Register the scroll
+		// surface as a fallback target for the space after the final row.
+		if value, over := ui.DragOver[taskDrag](scroll); over {
+			drag.source, drag.target, drag.after, drag.over = value.id, rows[len(rows)-1].id, true, true
+		}
+		if value, dropped := ui.Drop[taskDrag](scroll); dropped {
+			drag.source, drag.target, drag.after, drag.dropped = value.id, rows[len(rows)-1].id, true, true
+		}
+		if pg.taskDragID != "" && overScroll {
+			for _, current := range rows {
+				if current.id != pg.taskDragID {
+					continue
+				}
+				name, size := current.rowName(), pg.rowSize(current)
+				statusKey := pg.rowStatus(current)
+				status := tr(statusKey)
+				if !current.pending && current.snap.State == download.Running && !current.snap.Verifying && !current.snap.Reencoding && !current.snap.FinishingLive {
+					if speed := pg.rowSpeed(current); speed != "-" {
+						status = speed
+					}
+				}
+				icon := pg.taskFileIcon(current)
+				pct := pg.rowPct(current)
+				knownProgress := current.snap.Total > 0 || (!current.pending && current.snap.State == download.Done)
+				statusColor, _ := p.badgeColors(statusKey)
+				progressColor := p.progressFill(statusKey)
+				scroll.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+					y := max(r.Y, min(r.Y+r.H-style.HeightRow, r.Y+pointerY-style.HeightRow/2))
+					ghost := ui.Rect{X: r.X + 8, Y: y, W: max(float32(0), r.W-16), H: style.HeightRow - 2}
+					painter.Shadow(ghost, 8, 0, 3, 10, 0, ui.RGBA(0, 0, 0, .12))
+					painter.Fill(ghost, p.bg, 8)
+					painter.Stroke(ghost, p.bd2, 8, 1)
+					x := ghost.X + style.TaskTable.PadX
+					for _, column := range columns {
+						textY := ghost.Y + (ghost.H-style.TextBase)/2
+						// Painter.Text does not constrain its width like a UI
+						// text element. Clip each cell so long names and
+						// localized values cannot cover their neighbours.
+						right := min(ghost.X+ghost.W-8, x+column.width-8)
+						if right > x {
+							cell := ui.Rect{X: x, Y: ghost.Y, W: right - x, H: ghost.H}
+							painter.Clip(cell, 0, func() {
+								switch column.spec.id {
+								case "name":
+									iconBox := ui.Rect{X: x + 3, Y: ghost.Y + (ghost.H-22)/2, W: 22, H: 22}
+									if icon != nil {
+										painter.Image(icon, iconBox, ui.Contain)
+									} else {
+										painter.Fill(iconBox, p.hover, 5)
+										painter.Stroke(ui.Rect{X: iconBox.X + 6, Y: iconBox.Y + 4, W: 10, H: 14}, p.mu2, 2, 1)
+										painter.Line(iconBox.X+9, iconBox.Y+9, iconBox.X+13, iconBox.Y+9, 1, p.mu2)
+									}
+									painter.Text(x+38, textY, name, style.TextBase, p.fg)
+								case "size":
+									painter.Text(x, textY, size, style.TextBase, p.mu)
+								case "progress":
+									if !knownProgress {
+										painter.Text(x, textY, "—", style.TextBase, p.mu)
+									} else if column.width < 90 {
+										painter.Text(x, textY, strconv.Itoa(pct)+"%", style.TextBase, p.mu)
+									} else {
+										barWidth := max(float32(0), column.width-52)
+										bar := ui.Rect{X: x, Y: ghost.Y + (ghost.H-4)/2, W: barWidth, H: 4}
+										painter.Fill(bar, p.bd, 2)
+										if pct > 0 {
+											bar.W *= float32(min(pct, 100)) / 100
+											painter.Fill(bar, progressColor, 2)
+										}
+										painter.Text(x+barWidth+8, textY, strconv.Itoa(pct)+"%", style.TextBase, p.mu)
+									}
+								case "status":
+									painter.Text(x, textY, status, style.TextBase, statusColor)
+								}
+							})
+						}
+						x += column.width + style.TaskTable.Gap
+					}
+				})
+				break
+			}
+		}
+		scroll.Children(func() {
 			for _, r := range rows {
-				pg.tableRow(c, p, r, columns)
+				pg.tableRow(c, p, r, columns, &drag, overScroll)
 			}
 		})
+		// Animated rows may temporarily overlap or leave gaps. Resolve the
+		// insertion slot from the stable scroll layout, not whichever moving
+		// row happened to win hit-testing in this frame.
+		if overScroll && (drag.over || drag.dropped) {
+			contentY := max(float32(0), pointerY+pg.taskScroll.Y)
+			index := min(int(contentY/style.HeightRow), len(rows)-1)
+			drag.target = rows[index].id
+			drag.after = contentY >= float32(len(rows))*style.HeightRow ||
+				contentY-float32(index)*style.HeightRow >= style.HeightRow/2
+		}
+		if drag.dropped {
+			var order []string
+			if drag.source == drag.target {
+				order = append([]string(nil), pg.taskDragPreview...)
+			} else {
+				order = moveTaskOrder(pg.taskOrder(), drag.source, drag.target, drag.after)
+			}
+			if len(order) > 0 {
+				pg.preferences.ManualTaskOrder = order
+				pg.preferences.ManualTaskSort = true
+				pg.saveAppPreferences()
+			}
+			pg.taskDragPreview = nil
+		} else if drag.active && drag.over && drag.source != drag.target {
+			if order := moveTaskOrder(pg.taskOrder(), drag.source, drag.target, drag.after); len(order) > 0 {
+				changed := len(order) != len(pg.taskDragPreview)
+				if !changed {
+					for i := range order {
+						if order[i] != pg.taskDragPreview[i] {
+							changed = true
+							break
+						}
+					}
+				}
+				if changed {
+					pg.taskDragPreview = order
+					c.AnimationFrame()
+				}
+			}
+		} else if !drag.active {
+			pg.taskDragPreview = nil
+		}
+		if drag.active {
+			pg.taskDragID, pg.taskDragName = drag.source, drag.name
+		} else {
+			pg.taskDragID, pg.taskDragName = "", ""
+		}
 	})
 	if pg.showMenu {
 		pg.contextMenu(c, p)
@@ -81,13 +294,23 @@ func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns
 					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(tr("按名称排序"))
 					b.Children(func() {
 						ui.Text(c, tr("名称")).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
-						icon := style.IconArrowUp
-						if pg.sortDesc {
-							icon = style.IconArrowDown
+						if !pg.preferences.ManualTaskSort {
+							icon := style.IconArrowUp
+							if pg.sortDesc {
+								icon = style.IconArrowDown
+							}
+							style.Icon(c, icon, 12, p.mu)
 						}
-						style.Icon(c, icon, 12, p.mu)
 					})
-					b.OnClick(func() { pg.sortDesc = !pg.sortDesc; pg.saveAppPreferences() })
+					b.OnClick(func() {
+						if pg.preferences.ManualTaskSort {
+							pg.preferences.ManualTaskSort = false
+						} else {
+							pg.sortDesc = !pg.sortDesc
+						}
+						pg.taskDragPreview = nil
+						pg.saveAppPreferences()
+					})
 				} else {
 					ui.Text(c, tr(column.spec.title)).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
 				}
@@ -118,7 +341,7 @@ func (pg *mainPage) dragFilePaths(r d1Row) []string {
 	return paths
 }
 
-func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []taskColumnView) {
+func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []taskColumnView, drag *taskDragFrame, overScroll bool) {
 	childClicked := false
 	nameClicked, nameRightClicked := false, false
 	var nameClickMods ui.Modifiers
@@ -136,7 +359,25 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 	on := pg.sel == r.id || pg.checked[r.id]
 	c.Key(r.id)
 	row := taskGrid(c, columns).Height(style.HeightRow).Focusable().Role(ui.RoleRow).Selected(on).Label(r.rowName()).
-		BorderWidth(0, 0, 1, 0).BorderColor(p.bd).Cursor(ui.CursorPointer)
+		BorderWidth(0, 0, 1, 0).BorderColor(p.bd).Cursor(ui.CursorPointer).
+		Transition(ui.ElementTransition{Position: true, Duration: 180 * time.Millisecond})
+	if value, over := ui.DragOver[taskDrag](row); over {
+		_, y, _ := row.PointerPosition()
+		drag.source, drag.target, drag.after, drag.over = value.id, r.id, y >= style.HeightRow/2, true
+		if value.id == r.id && len(pg.taskDragPreview) == 0 {
+			row.Cursor(ui.CursorNotAllowed)
+		}
+	}
+	if value, dropped := ui.Drop[taskDrag](row); dropped {
+		_, y, _ := row.PointerPosition()
+		drag.source, drag.target, drag.after, drag.dropped = value.id, r.id, y >= style.HeightRow/2, true
+	}
+
+	if pg.taskDragID == r.id && overScroll {
+		// Hide the placeholder only while its floating copy is visible.
+		// Outside the table, keep the task visible until the drag ends.
+		row.Opacity(0)
+	}
 	if !r.pending && r.snap.State == download.Done && r.snap.FilePath != "" {
 		operation := transfer.Move
 		if pg.preferences.DragFileAction == "copy" {
@@ -295,14 +536,10 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 					}
 				})
 				if last {
-					left := float32(0)
-					if column.spec.id == "name" {
-						left = 38
-					} // Keep the file/selection slot available.
-					overlay := ui.Box(c).Absolute().Left(left).Top((style.HeightRow - 1 - style.SizeIconButton) / 2).
+					overlay := ui.Box(c).Absolute().Right(0).Top((style.HeightRow - 1 - style.SizeIconButton) / 2).
 						Width(rowActionsWidth).Height(style.SizeIconButton)
 					overlay.Children(func() {
-						if pg.rowActions(c, p, r, reveal) {
+						if pg.rowActions(c, p, r, reveal, drag) {
 							childClicked = true
 						}
 					})
@@ -348,7 +585,7 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 	}
 }
 
-func (pg *mainPage) rowActions(c *ui.Context, p *d1Palette, r d1Row, reveal bool) bool {
+func (pg *mainPage) rowActions(c *ui.Context, p *d1Palette, r d1Row, reveal bool, drag *taskDragFrame) bool {
 	clicked := false
 	group := ui.Row(c).Width(rowActionsWidth).Height(style.SizeIconButton).AlignItems(ui.Center)
 	if !reveal && !group.FocusWithin() {
@@ -399,6 +636,29 @@ func (pg *mainPage) rowActions(c *ui.Context, p *d1Palette, r d1Row, reveal bool
 				pg.showDetails()
 			}
 		})
+		c.Key("task-reorder-handle")
+		grip := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Shrink(0).Center().Cursor(ui.CursorGrab).
+			Label(tr("拖动排序")).Tooltip(tr("拖动排序")).Drag(taskDrag{id: r.id})
+		visible := reveal || grip.FocusVisible() || grip.Dragging()
+		opacity := float32(0)
+		if visible {
+			opacity = 1
+		}
+		grip.Opacity(grip.Animate("grip-opacity", opacity, 140*time.Millisecond))
+		if grip.Dragging() {
+			grip.Cursor(ui.CursorGrabbing)
+			drag.active = true
+			drag.source = r.id
+			drag.name = r.rowName()
+		}
+		if grip.Clicked() {
+			clicked = true
+		}
+		// MyGo also paints a copy of the drag source at the pointer. The
+		// row preview is the drag image, so avoid a second floating grip.
+		if !grip.Dragging() {
+			grip.Children(func() { d1Icon(c, "grip-vertical", 15, p.mu) })
+		}
 	})
 	return clicked
 }

@@ -85,6 +85,7 @@ func (pg *mainPage) importSettings() {
 		pg.limitValue = strconv.FormatFloat(prefs.RateMBps, 'f', -1, 64)
 	}
 	pg.mgr.SetDownloadDefaults(pg.saveDir, prefs.Connections)
+	pg.mgr.SetConcurrency(prefs.TaskConcurrency)
 	pg.mgr.SetMaxConnections(prefs.MaxConnections)
 	pg.mgr.SetAllowUnverifiedResume(prefs.AllowUnverifiedResume)
 	pg.mgr.SetOverwriteExisting(prefs.FileExistsAction != "copy")

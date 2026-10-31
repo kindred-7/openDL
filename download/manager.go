@@ -1015,7 +1015,24 @@ func (m *Manager) Redownload(id string) (string, error) {
 	return "", fmt.Errorf(i18n.T("任务不存在"))
 }
 
-func (m *Manager) Concurrency() int { return m.concurrency }
+// Concurrency returns the maximum number of active tasks across all queues.
+func (m *Manager) Concurrency() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.concurrency
+}
+
+// SetConcurrency updates the task limit without interrupting active tasks.
+// Raising it immediately gives waiting tasks any newly available slots.
+func (m *Manager) SetConcurrency(parallel int) {
+	if parallel < 1 {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.concurrency = parallel
+	m.dispatchLocked()
+}
 
 // HasMaintenanceWork reports task work that can run while a task still shows
 // Done, such as an independent signature check or a resource-sync probe.
@@ -1509,6 +1526,14 @@ func (m *Manager) download(t *Task) error {
 		}
 	}
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotFound && req.Header.Get("Cookie") == "" && req.Header.Get("Authorization") == "" {
+			if u, parseErr := url.Parse(address); parseErr == nil && strings.EqualFold(u.Hostname(), "github.com") {
+				parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+				if len(parts) == 7 && parts[2] == "actions" && parts[3] == "runs" && parts[5] == "artifacts" {
+					return i18n.NewError("HTTP 404：GitHub Actions 产物可能需要登录，当前任务未取得登录信息。请确认扩展的浏览器登录状态，或使用浏览器下载。")
+				}
+			}
+		}
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {

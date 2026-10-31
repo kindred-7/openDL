@@ -25,6 +25,8 @@ import (
 // maxConnectionsLimit 是全局连接上限允许的最大值，0 表示无限制。
 const maxConnectionsLimit = 256
 
+const maxTaskConcurrency = 64
+
 // maxFileTypes 是自动下载文件类型列表的条目上限。
 const maxFileTypes = 64
 
@@ -38,6 +40,7 @@ type appPreferences struct {
 	AccentColor           string                     `json:"accent_color,omitempty"`
 	Directory             string                     `json:"directory"`
 	Connections           int                        `json:"connections"`
+	TaskConcurrency       int                        `json:"task_concurrency,omitempty"`
 	MaxConnections        int                        `json:"max_connections"`
 	AllowUnverifiedResume bool                       `json:"allow_unverified_resume,omitempty"`
 	Clipboard             bool                       `json:"clipboard"`
@@ -76,10 +79,12 @@ type appPreferences struct {
 	CustomQueues          []customQueueSpec          `json:"custom_queues,omitempty"`
 	QueueSeq              int                        `json:"queue_seq,omitempty"`
 	SortDesc              bool                       `json:"sort_desc,omitempty"`
+	ManualTaskSort        bool                       `json:"manual_task_sort,omitempty"`
+	ManualTaskOrder       []string                   `json:"manual_task_order,omitempty"`
 }
 
 func defaultAppPreferences() appPreferences {
-	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, Clipboard: true, MinTrayStart: false, MinTrayClose: true, NotifyComplete: false, NotifyApp: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
+	return appPreferences{Shortcuts: map[string]string{}, Language: i18n.Chinese, AccentColor: "blue", Directory: downloadDir(), Connections: 4, TaskConcurrency: 3, Clipboard: true, MinTrayStart: false, MinTrayClose: true, NotifyComplete: false, NotifyApp: true, NightOn: false, NightAt: "01:00", SettingsSidebarWidth: settingsSidebarDefault, Updates: appupdate.Config{Automatic: true}}
 }
 
 var connectionOptions = [...]int{-1, 1, 4, 8, 16, 32}
@@ -188,6 +193,9 @@ func (p *appPreferences) validate() {
 	}
 	if !filepath.IsAbs(p.Directory) {
 		p.Directory = downloadDir()
+	}
+	if p.TaskConcurrency < 1 || p.TaskConcurrency > maxTaskConcurrency {
+		p.TaskConcurrency = 3
 	}
 	switch p.Connections {
 	case -1, 1, 4, 8, 16, 32:
@@ -586,6 +594,18 @@ func (pg *mainPage) setDefaultConnections(value int) {
 	}
 	if pg.mgr != nil {
 		pg.mgr.SetDownloadDefaults(pg.saveDir, value)
+	}
+	pg.saveAppPreferences()
+}
+
+// setTaskConcurrency applies the global task limit across all queues.
+func (pg *mainPage) setTaskConcurrency(value int) {
+	if value < 1 || value > maxTaskConcurrency {
+		return
+	}
+	pg.preferences.TaskConcurrency = value
+	if pg.mgr != nil {
+		pg.mgr.SetConcurrency(value)
 	}
 	pg.saveAppPreferences()
 }

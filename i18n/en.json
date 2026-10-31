@@ -164,6 +164,7 @@
   "显示列": "Visible columns",
   "空间不足": "Not enough space",
   "列顺序": "Column order",
+  "拖动排序": "Drag to reorder",
   "拖动排序，或使用 Alt+Shift+上、下方向键": "Drag to reorder, or use Alt+Shift+Up/Down",
   "拖动调整列顺序": "Drag to reorder columns",
   "重置列顺序、宽度和显示": "Reset column order, widths and visibility",
@@ -409,6 +410,8 @@
   "默认保存位置": "Default save location",
   "新下载默认保存到此文件夹，已有任务不受影响。": "New downloads are saved here. Existing tasks are unaffected.",
   "目录 路径 文件夹 保存": "directory path folder save",
+  "同时下载任务数": "Simultaneous downloads",
+  "所有队列同时下载的任务上限；调低时不会中断正在下载的任务。": "Maximum active downloads across all queues. Lowering the limit does not interrupt active downloads.",
   "默认连接数": "Default connections",
   "允许未校验续传": "Allow unverified resume",
   "没有 SHA-256 时，允许在无法确认文件一致的情况下保留已下载分段；文件可能损坏。": "Without SHA-256, retain downloaded segments even when the file cannot be confirmed as unchanged; the file may be corrupted.",
@@ -1395,5 +1398,6 @@
   "用时 %d 秒": "Time: %d sec",
   "用时 %d 分 %d 秒": "Time: %d min %d sec",
   "用时 %d 小时 %d 分": "Time: %d hr %d min",
-  "保持原文件后缀": "Keep original file extension"
+  "保持原文件后缀": "Keep original file extension",
+  "HTTP 404：GitHub Actions 产物可能需要登录，当前任务未取得登录信息。请确认扩展的浏览器登录状态，或使用浏览器下载。": "HTTP 404: GitHub Actions artifacts may require sign-in, and this task has no login information. Check the extension's browser login setting, or download with your browser."
 }

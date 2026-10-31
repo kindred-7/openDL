@@ -1,9 +1,11 @@
 // Source messages identify presentation text only. Browser locale selects the catalog.
 (() => {
   const ids = {
+  "搜索资源名称或链接": "m_search_resources",
+  "没有匹配的资源": "m_no_matching_resources",
   "自定义嗅探格式": "m_sniff_formats",
   "例如：mobi, epub, psd": "m_sniff_formats_placeholder",
-  "在默认格式之外添加扩展名，以逗号或空格分隔；不影响浏览器下载接管。": "m_sniff_formats_hint",
+  "追加格式，用逗号或空格分隔；不影响下载接管。": "m_sniff_formats_hint",
   "保存嗅探格式": "m_sniff_formats_save",
   "重试读取嗅探设置": "m_sniff_formats_retry",
   "无法读取嗅探格式": "m_sniff_formats_read_failed",

@@ -1,7 +1,7 @@
 {
   "m_sniff_formats": { "message": "自定义嗅探格式" },
   "m_sniff_formats_placeholder": { "message": "例如：mobi, epub, psd" },
-  "m_sniff_formats_hint": { "message": "在默认格式之外添加扩展名，以逗号或空格分隔；不影响浏览器下载接管。" },
+  "m_sniff_formats_hint": { "message": "追加格式，用逗号或空格分隔；不影响下载接管。" },
   "m_sniff_formats_save": { "message": "保存嗅探格式" },
   "m_sniff_formats_retry": { "message": "重试读取嗅探设置" },
   "m_sniff_formats_read_failed": { "message": "无法读取嗅探格式" },
@@ -395,6 +395,8 @@
   "m_copy_failed": {
     "message": "无法复制链接"
   },
+  "m_search_resources": { "message": "搜索资源名称或链接" },
+  "m_no_matching_resources": { "message": "没有匹配的资源" },
   "m_capture_cookie_failed": {
     "message": "无法获取浏览器登录状态，请从扩展资源列表重试"
   }
