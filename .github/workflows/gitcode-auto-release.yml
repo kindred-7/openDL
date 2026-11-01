@@ -82,8 +82,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'The release tag is not an ancestor of GitCode main.' }
           $version = [string](Get-Content mygo.json -Raw | ConvertFrom-Json).version
           if ($version -cne $env:RELEASE_VERSION) { throw 'The tag and mygo.json versions differ.' }
-          $notes = "docs/release-notes-$version.md"
-          if (-not (Test-Path -LiteralPath $notes)) { throw "Missing committed release notes: $notes" }
+          $legacyNotes = "docs/release-notes-$version.md"
+          if (Test-Path -LiteralPath $legacyNotes) {
+            $notesText = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $legacyNotes).Path)
+          } else {
+            $notesText = (& git log -1 --format=%b) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read release commit notes.' }
+            if ([string]::IsNullOrWhiteSpace($notesText)) {
+              $notesText = (& git log -1 --format=%s) -join "`n"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not read release commit subject.' }
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($notesText)) { throw 'Release notes are empty.' }
+          $notes = Join-Path $env:RUNNER_TEMP "opendl-release-notes-$version.md"
+          [IO.File]::WriteAllText($notes, $notesText.Trim() + "`n", [Text.UTF8Encoding]::new($false))
 
       - name: Install Go
         if: steps.select.outputs.publish == 'true'
@@ -122,7 +134,7 @@ jobs:
           $key = Join-Path $env:RUNNER_TEMP ('opendl-key-' + [guid]::NewGuid().ToString('N'))
           try {
             [IO.File]::WriteAllText($key, $env:RELEASE_PRIVATE_KEY.Trim(), [Text.UTF8Encoding]::new($false))
-            ./scripts/prepare-gitcode-update.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -PrivateKey $key -Tag $env:RELEASE_TAG
+            ./scripts/prepare-gitcode-update.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -NotesFile (Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md") -PrivateKey $key -Tag $env:RELEASE_TAG
           } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
 
       - name: Save signed release files
@@ -171,7 +183,7 @@ jobs:
               Write-Host 'Removed the incomplete auto-generated prerelease.'
             }
           } catch { Write-Host 'No incomplete prerelease to remove.' }
-          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -Manifest 'build/windows-amd64/releases.json' -NotesFile "docs/release-notes-$env:RELEASE_VERSION.md" -Tag $env:RELEASE_TAG
+          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -Manifest 'build/windows-amd64/releases.json' -NotesFile (Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md") -Tag $env:RELEASE_TAG
 
   sync-github:
     needs: release
@@ -269,8 +281,20 @@ jobs:
           # Draft releases are invisible to get-by-tag and to this token's
           # release listing, so publish directly and look releases up by tag
           # only. A pre-existing draft is adopted instead of a duplicate.
-          $notes = "docs/release-notes-$env:RELEASE_VERSION.md"
-          if (-not (Test-Path -LiteralPath $notes)) { throw 'Release notes are missing.' }
+          $legacyNotes = "docs/release-notes-$env:RELEASE_VERSION.md"
+          if (Test-Path -LiteralPath $legacyNotes) {
+            $notesText = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $legacyNotes).Path)
+          } else {
+            $notesText = (& git log -1 --format=%b) -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not read release commit notes.' }
+            if ([string]::IsNullOrWhiteSpace($notesText)) {
+              $notesText = (& git log -1 --format=%s) -join "`n"
+              if ($LASTEXITCODE -ne 0) { throw 'Could not read release commit subject.' }
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($notesText)) { throw 'Release notes are empty.' }
+          $notes = Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md"
+          [IO.File]::WriteAllText($notes, $notesText.Trim() + "`n", [Text.UTF8Encoding]::new($false))
           $release = $null
           try { $release = Invoke-RestMethod -Headers $headers -Uri "$api/releases/tags/$tag" }
           catch {

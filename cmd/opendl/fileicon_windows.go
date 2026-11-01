@@ -4,7 +4,9 @@ package main
 
 import (
 	"image"
+	"image/draw"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -113,6 +115,14 @@ func extractFileIcon(path string, actual bool) image.Image {
 		path = "file"
 	}
 	if actual {
+		// Older executables can have a small icon centered in the Shell's
+		// jumbo canvas. Extract their standard icon directly before trying
+		// the system image list so it fills the table slot.
+		if strings.EqualFold(filepath.Ext(path), ".exe") {
+			if img := extractLargeFileIcon(path); img != nil {
+				return img
+			}
+		}
 		if img := extractFileIconHandle(path, true); img != nil {
 			return img
 		}
@@ -332,5 +342,27 @@ func renderFileIconAtSize(icon uintptr, size int) image.Image {
 			}
 		}
 	}
-	return img
+	return normalizeSmallFileIcon(img)
+}
+
+// Some legacy icons occupy only a small corner of the shell's icon canvas.
+// Trim excessive transparent space while retaining their aspect ratio.
+func normalizeSmallFileIcon(img *image.RGBA) image.Image {
+	bounds := img.Bounds()
+	visible := image.Rectangle{}
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if img.RGBAAt(x, y).A > 8 {
+				visible = visible.Union(image.Rect(x, y, x+1, y+1))
+			}
+		}
+	}
+	if visible.Empty() || max(visible.Dx(), visible.Dy()) > bounds.Dx()/2 {
+		return img
+	}
+	side := max(visible.Dx(), visible.Dy())
+	result := image.NewRGBA(image.Rect(0, 0, side, side))
+	offset := image.Pt((side-visible.Dx())/2, (side-visible.Dy())/2)
+	draw.Draw(result, image.Rectangle{Min: offset, Max: offset.Add(visible.Size())}, img, visible.Min, draw.Src)
+	return result
 }

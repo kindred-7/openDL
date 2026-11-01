@@ -1703,15 +1703,7 @@ func (pg *mainPage) ovSegments(c *ui.Context, p *d1Palette, r d1Row) {
 	}
 	pills := connections
 	if pills == -1 {
-		pills = 0
-		for _, segment := range r.snap.Segments {
-			if segment.Active {
-				pills++
-			}
-		}
-		if pills == 0 && len(r.snap.Segments) > 0 {
-			pills = len(r.snap.Segments)
-		}
+		pills = r.snap.EffectiveConnections
 	}
 	if !r.pending && r.snap.State == download.Done {
 		pills = 1
@@ -1746,7 +1738,11 @@ func (pg *mainPage) ovSegments(c *ui.Context, p *d1Palette, r d1Row) {
 
 // ovChart 是概览的速度曲线区；fill 模式让曲线占满容器高度。
 func (pg *mainPage) ovChart(c *ui.Context, p *d1Palette, r d1Row, fill bool) {
-	pg.h4(c, p, "速度（最近 60 秒，MB/s）", tr("峰值 ")+pg.peakText(r))
+	elapsed := time.Duration(0)
+	if !r.pending {
+		elapsed = r.snap.Elapsed
+	}
+	pg.h4(c, p, tr("下载时长")+" "+durationText(elapsed), tr("峰值 ")+pg.peakText(r))
 	pg.chart(c, p, r, fill)
 }
 
@@ -1810,14 +1806,25 @@ func (pg *mainPage) blockMap(c *ui.Context, p *d1Palette, r d1Row) {
 			pnt.Fill(ui.Rect{X: rr.X, Y: rr.Y + 1, W: rr.W * float32(pct) / 100, H: rr.H - 2}, p.pri, 0)
 		}
 		if total > 0 {
-			for _, segment := range segments {
-				if segment.Start < 0 || segment.Start >= total {
-					continue
-				}
-				x := rr.X + rr.W*float32(segment.Start)/float32(total)
+			count := r.snap.Connections
+			if count == -1 {
+				count = r.snap.EffectiveConnections
+			}
+			count = max(1, min(count, 32))
+			for i := 0; i < count; i++ {
+				start := total/int64(count)*int64(i) + total%int64(count)*int64(i)/int64(count)
+				end := total/int64(count)*int64(i+1) + total%int64(count)*int64(i+1)/int64(count)
+				x := rr.X + rr.W*float32(i)/float32(count)
 				color := p.mu
-				if segment.Active {
-					color = p.ok
+				for _, segment := range segments {
+					position := segment.Start + max(segment.Downloaded, int64(0))
+					if segment.End >= segment.Start {
+						position = min(position, segment.End)
+					}
+					if segment.Active && position >= start && position < end {
+						color = p.ok
+						break
+					}
 				}
 				pnt.Line(x, rr.Y+1, x, rr.Y+rr.H-1, 2, color)
 			}
@@ -1874,7 +1881,7 @@ func sliceCoverage(total int64, segments []download.Segment, start, end int64) f
 	return min(float32(1), float32(covered)/float32(end-start))
 }
 
-// connList 展示实际分段的进度与活跃速度。
+// connList 按显示区间汇总进度，内部检查点不作为独立连接展示。
 func (pg *mainPage) connList(c *ui.Context, p *d1Palette, r d1Row) {
 	segments := r.snap.Segments
 	active := 0
@@ -1883,21 +1890,55 @@ func (pg *mainPage) connList(c *ui.Context, p *d1Palette, r d1Row) {
 			active++
 		}
 	}
+	if r.snap.Total > 0 && len(segments) > 0 {
+		total := r.snap.Total
+		count := r.snap.Connections
+		if count == -1 {
+			count = r.snap.EffectiveConnections
+		}
+		count = max(1, min(count, 32))
+		regions := make([]download.Segment, count)
+		for i := range regions {
+			start := total/int64(count)*int64(i) + total%int64(count)*int64(i)/int64(count)
+			end := total/int64(count)*int64(i+1) + total%int64(count)*int64(i+1)/int64(count)
+			regions[i] = download.Segment{Start: start, End: end - 1}
+			for _, segment := range segments {
+				downloaded := max(segment.Downloaded, int64(0))
+				if segment.End >= segment.Start {
+					downloaded = min(downloaded, segment.End-segment.Start+1)
+				}
+				left, right := max(start, segment.Start), min(end, segment.Start+downloaded)
+				if right > left {
+					regions[i].Downloaded += right - left
+				}
+				position := segment.Start + downloaded
+				if segment.End >= segment.Start {
+					position = min(position, segment.End)
+				}
+				if segment.Active && position >= start && position < end {
+					regions[i].Active = true
+					regions[i].Speed += segment.Speed
+				}
+			}
+		}
+		segments = regions
+	}
 	ui.Column(c).FillWidth().Gap(8).Margin(16, 0, 0, 0).Children(func() {
 		if len(segments) == 0 {
 			ui.Text(c, tr("暂无分段明细")).FontSize(style.TextXS).TextColor(p.mu)
 			return
 		}
-		ui.Text(c, fmt.Sprintf(tr("活跃分段：%d，当前分段：%d"), active, len(segments))).FontSize(style.TextXS).TextColor(p.mu)
+		ui.Text(c, fmt.Sprintf(tr("活跃连接：%d，显示区间：%d"), active, len(segments))).FontSize(style.TextXS).TextColor(p.mu)
 		ui.Grid(c).Columns(2).Gap(6).Children(func() {
 			for i, segment := range segments {
+				c.Key(i)
 				fraction := float32(0)
 				if segment.End >= segment.Start {
 					fraction = min(float32(1), float32(max(segment.Downloaded, int64(0)))/float32(segment.End-segment.Start+1))
 				}
 				ui.Column(c).Padding(8).Gap(6).Border(1, p.bd).Radius(4).Children(func() {
 					ui.Row(c).FillWidth().Justify(ui.SpaceBetween).Children(func() {
-						ui.Text(c, fmt.Sprintf("C%02d", i+1)).FontSize(style.TextXS).TextColor(p.mu)
+						ui.Text(c, fmt.Sprintf("%02d", i+1)).FontSize(style.TextXS).TextColor(p.mu)
 						if segment.End >= segment.Start {
 							ui.Text(c, fmt.Sprintf("%.0f%%", fraction*100)).FontSize(style.TextXS).TextColor(p.fg)
 						}

@@ -1,6 +1,5 @@
-# URL masks extracted from 原始安装样本 installer entry 044
-# 参考下载器 treats matching URLs as special paths (background resources, updates,
-# ads and similar) that must not enter the normal download flow.
+# URL patterns excluded from normal download interception.
+# These cover background resources, updates, ads and similar requests.
 http://*.skyrock.com/*.img
 http://*.skyrock.net/*.img
 http://www.sonyericsson.com/origin/images/content/*.exe
@@ -88,5 +87,3 @@ https://lookaside.fbsbx.com/file/*.pdf?token=*
 https://www.youtube.com/s/search/audio/*.mp3
 http://msedge.b.tlu.dl.delivery.mp.microsoft.com/filestreamingservice/files/*
 https://cdn.thegameawards.com/frontend/video/tga*.mp4
-http://*.internetdownloadmanager.com/updates/*/idmupdt.exe*
-https://*.internetdownloadmanager.com/updates/*/idmupdt.exe*

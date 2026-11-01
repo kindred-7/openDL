@@ -10,17 +10,15 @@ import (
 //go:embed masks.txt
 var masksRaw string
 
-// MaskList recognizes "special paths": URL masks 参考下载器 handles outside the
-// normal interception flow (background resources, update files, ads and
-// other paths that must not become downloads). Patterns use "*" wildcards,
-// matching the table shipped with the 参考下载器 installer.
+// MaskList matches background resources, update files, ads and other paths
+// excluded from normal download interception. Patterns use "*" wildcards.
 type MaskList struct {
 	patterns []string
 	re       []*regexp.Regexp
 	once     sync.Once
 }
 
-// DefaultMasks returns the mask table extracted from the 参考下载器 6.43 installer.
+// DefaultMasks returns the embedded path exclusion patterns.
 func DefaultMasks() *MaskList {
 	return &MaskList{patterns: parseLines(masksRaw)}
 }

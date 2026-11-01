@@ -463,15 +463,7 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 							bar := ui.Box(c).Grow(1).Shrink(1).Basis(0).Height(4)
 							count := r.snap.Connections
 							if count == -1 {
-								count = 0
-								for _, segment := range r.snap.Segments {
-									if segment.Active {
-										count++
-									}
-								}
-								if count == 0 && len(r.snap.Segments) > 0 {
-									count = len(r.snap.Segments)
-								}
+								count = r.snap.EffectiveConnections
 							}
 							if (!r.pending && r.snap.State == download.Done) || r.snap.Total <= 0 || len(r.snap.Segments) <= 1 || count <= 1 {
 								count = 1

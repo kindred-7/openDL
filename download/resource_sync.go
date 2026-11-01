@@ -201,7 +201,6 @@ func (m *Manager) syncTask(t *Task, revision uint64) error {
 	return m.beginSync(t, revision)
 }
 
-
 // SyncNow 立即探测一次资源变化并返回结果说明；与周期探测同一套语义。
 func (m *Manager) SyncNow(id string) (string, error) {
 	m.mu.Lock()
@@ -282,7 +281,9 @@ func (m *Manager) beginSync(t *Task, revision uint64) error {
 		return nil
 	}
 	t.editing = true
+	t.workers.Add(1)
 	m.mu.Unlock()
+	defer t.workers.Done()
 	ownsEditing := true
 	defer func() {
 		if ownsEditing {

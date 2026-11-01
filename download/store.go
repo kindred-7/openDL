@@ -106,7 +106,7 @@ func (m *Manager) EnablePersistence(dir string) error {
 			continue
 		}
 		u, err := url.Parse(rec.Request.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || !filepath.IsAbs(rec.Request.Directory) {
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ftp" && u.Scheme != "ftps") || u.Host == "" || !filepath.IsAbs(rec.Request.Directory) {
 			problems = append(problems, entry.Name())
 			continue
 		}

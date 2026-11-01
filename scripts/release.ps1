@@ -29,6 +29,16 @@ $config = $configText | ConvertFrom-Json
 $currentVersion = [string]$config.version
 if ($currentVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid current project version.' }
 if ([version]$Version -lt [version]$currentVersion) { throw 'The release version cannot be lower than the current version.' }
+$extensionUpdates = foreach ($relativePath in @('extension/manifest.json', 'extension/manifest-firefox.json')) {
+    $extensionPath = Join-Path $root $relativePath
+    $extensionText = [IO.File]::ReadAllText($extensionPath)
+    $extensionVersion = [string]($extensionText | ConvertFrom-Json).version
+    if ($extensionVersion -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw "Invalid extension version: $relativePath" }
+    if ([version]$Version -lt [version]$extensionVersion) { throw "The release version cannot be lower than the extension version: $relativePath" }
+    $extensionPattern = '(?m)("version"\s*:\s*")' + [regex]::Escape($extensionVersion) + '(")'
+    if ([regex]::Matches($extensionText, $extensionPattern).Count -ne 1) { throw "Could not safely update the extension version: $relativePath" }
+    [pscustomobject]@{ Path = $extensionPath; Text = $extensionText; Version = $extensionVersion; Pattern = $extensionPattern }
+}
 $head = (& git @gitArgs rev-parse --verify 'HEAD^{commit}').Trim()
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve HEAD.' }
 & git @gitArgs show-ref --verify --quiet "refs/tags/$Version"
@@ -75,6 +85,13 @@ if ($currentVersion -cne $Version) {
     [IO.File]::WriteAllText($configPath, $updated, [Text.UTF8Encoding]::new($false))
 }
 
+foreach ($extension in $extensionUpdates) {
+    if ($extension.Version -cne $Version) {
+        $extensionUpdated = [regex]::Replace($extension.Text, $extension.Pattern, { param($m) $m.Groups[1].Value + $Version + $m.Groups[2].Value })
+        [IO.File]::WriteAllText($extension.Path, $extensionUpdated, [Text.UTF8Encoding]::new($false))
+    }
+}
+
 # Include tracked changes and the release scripts; new unrelated files must be
 # staged explicitly by the operator before running the script.
 & git @gitArgs add -u
@@ -85,13 +102,16 @@ foreach ($path in @('scripts/release.ps1', 'scripts/push-remotes.ps1')) {
         if ($LASTEXITCODE -ne 0) { throw "Failed to stage $path." }
     }
 }
-& git @gitArgs add -f -- "docs/release-notes-$Version.md"
-if ($LASTEXITCODE -ne 0) { throw 'Failed to stage release notes.' }
+# Notes remain local; the release commit body supplies CI publication metadata.
 & git @gitArgs diff --cached --quiet --exit-code
 $diffCode = $LASTEXITCODE
-if ($diffCode -eq 1) {
-    & git @gitArgs commit -m "chore: release OpenDL $Version"
-    if ($LASTEXITCODE -ne 0) { throw 'Commit failed; check the index and retry.' }
+if ($diffCode -eq 1 -or ($diffCode -eq 0 -and $localTagStatus -eq 1)) {
+    $messagePath = Join-Path $gitDir 'opendl-release-message.txt'
+    try {
+        [IO.File]::WriteAllText($messagePath, "chore: release OpenDL $Version`n`n$normalizedNotes", [Text.UTF8Encoding]::new($false))
+        & git @gitArgs commit --allow-empty --file $messagePath
+        if ($LASTEXITCODE -ne 0) { throw 'Commit failed; check the index and retry.' }
+    } finally { Remove-Item -LiteralPath $messagePath -ErrorAction SilentlyContinue }
 } elseif ($diffCode -ne 0) { throw 'Could not inspect staged changes.' }
 
 $head = (& git @gitArgs rev-parse --verify 'HEAD^{commit}').Trim()

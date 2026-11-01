@@ -671,7 +671,11 @@ func (m *Manager) SetProxyConfig(value ProxyConfig) error {
 	if m.proxy == nil {
 		return fmt.Errorf(i18n.T("下载代理尚未初始化"))
 	}
-	return m.proxy.set(value)
+	if err := m.proxy.set(value); err != nil {
+		return err
+	}
+	m.autoConnRouteEpoch.Add(1)
+	return nil
 }
 
 // UpdateTransport shares only the configured proxy route with update requests;
@@ -707,6 +711,7 @@ func (m *Manager) BlockProxy(reason string) {
 	m.proxy.mu.Lock()
 	m.proxy.blocked = &proxyConfigurationError{reason: reason}
 	m.proxy.mu.Unlock()
+	m.autoConnRouteEpoch.Add(1)
 }
 
 func nonRetryableProxyError(err error) bool {

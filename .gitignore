@@ -2,6 +2,7 @@
 /cmd/opendl/build/
 /.mygo/
 /output/
+# Local documentation is never included in source pushes.
 /docs/
 /_extracted/
 /AGENTS.md

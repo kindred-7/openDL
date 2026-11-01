@@ -8,10 +8,11 @@ import (
 // connLimiter caps concurrent responses across all tasks and origins. A zero
 // limit is unlimited; changing it never interrupts an existing response.
 type connLimiter struct {
-	mu      sync.Mutex
-	limit   int
-	used    int
-	waiters []*connWaiter
+	mu         sync.Mutex
+	limit      int
+	used       int
+	waiters    []*connWaiter
+	contention uint64
 }
 
 type connWaiter struct {
@@ -58,6 +59,17 @@ func (l *connLimiter) getLimit() int {
 	return l.limit
 }
 
+// contended reports queued requests, whose throughput cannot be attributed to
+// the chosen per-task connection target.
+func (l *connLimiter) contentionState() (bool, uint64) {
+	if l == nil {
+		return false, 0
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.waiters) > 0, l.contention
+}
+
 // acquire serves queued requests in arrival order. Cancellation removes a
 // waiter or releases a concurrently granted slot before waking the next one.
 func (l *connLimiter) acquire(ctx context.Context) (func(), error) {
@@ -75,6 +87,7 @@ func (l *connLimiter) acquire(ctx context.Context) (func(), error) {
 		return l.releaseFunc(), nil
 	}
 	waiter := &connWaiter{ctx: ctx, ready: make(chan struct{})}
+	l.contention++
 	l.waiters = append(l.waiters, waiter)
 	l.dispatchLocked()
 	l.mu.Unlock()

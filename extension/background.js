@@ -175,6 +175,23 @@ function clearSubmissions(tabId) {
 // headers or bodies. Session storage survives a worker restart but not a browser
 // restart. Serialize mutations so a navigation cannot race an earlier write.
 const observedPlaylists = new Map();
+// DownloadItem has no tabId in Chrome. Retain only short-lived attachment
+// provenance here; credentials are read from the cookie store at handoff time.
+const downloadContexts = new Map();
+const DOWNLOAD_CONTEXT_TTL = 120000;
+function rememberDownloadContext(details) {
+  const now = Date.now();
+  for (const [url, entries] of downloadContexts) {
+    const live = entries.filter((entry) => now - entry.at < DOWNLOAD_CONTEXT_TTL);
+    if (live.length) downloadContexts.set(url, live);
+    else downloadContexts.delete(url);
+  }
+  const entries = (downloadContexts.get(details.url) || []).filter((entry) => entry.tabId !== details.tabId);
+  entries.push({ tabId: details.tabId, at: now });
+  downloadContexts.delete(details.url);
+  downloadContexts.set(details.url, entries.slice(-16));
+  if (downloadContexts.size > 256) downloadContexts.delete(downloadContexts.keys().next().value);
+}
 let playlistChanges = Promise.resolve();
 const playlistStorageKey = (tabId) => `opendl-playlists:${tabId}`;
 const badgeTimers = new Map();
@@ -383,6 +400,7 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
   // Explicit attachments can use dynamic URLs with no useful suffix, such as
   // NAS download endpoints. Do not retain the response header or its filename.
   const attachment = /^\s*attachment(?:\s*;|\s*$)/i.test(disposition);
+  if (attachment && details.statusCode >= 200 && details.statusCode < 300) rememberDownloadContext(details);
   // Media element requests are useful even without a suffix. Do not classify
   // arbitrary fetch/XHR video fragments as complete downloadable files.
   const ext = playlistExt || (details.type === "media" ? directMediaMime.get(mime) : "");
@@ -678,6 +696,32 @@ function takeoverExt(url) {
   }
 }
 
+async function downloadSourceTab(item) {
+  const now = Date.now();
+  const tabs = await chrome.tabs.query({});
+  const compatible = tabs.filter((tab) => Boolean(tab.incognito) === Boolean(item.incognito) &&
+    (!item.cookieStoreId || !tab.cookieStoreId || tab.cookieStoreId === item.cookieStoreId));
+  const direct = compatible.find((tab) => Number.isInteger(item.tabId) && tab.id === item.tabId);
+  if (direct) return direct;
+  const ids = new Set();
+  for (const url of new Set([item.url, item.finalUrl].filter(Boolean))) {
+    for (const entry of downloadContexts.get(url) || []) {
+      if (now - entry.at < DOWNLOAD_CONTEXT_TTL) ids.add(entry.tabId);
+    }
+  }
+  const observed = compatible.filter((tab) => ids.has(tab.id));
+  if (observed.length === 1) return observed[0];
+  // Use an exact referrer match only. Never borrow credentials from whichever
+  // tab happens to be active, or guess between multiple cookie containers.
+  const withoutFragment = (value) => {
+    try { const url = new URL(value); url.hash = ""; return url.href; } catch { return ""; }
+  };
+  const referrer = withoutFragment(item.referrer);
+  const referred = compatible.filter((tab) => referrer && withoutFragment(tab.url) === referrer &&
+    (!ids.size || ids.has(tab.id)));
+  return referred.length === 1 ? referred[0] : null;
+}
+
 chrome.downloads.onCreated.addListener((item) => {
   void (async () => {
     try {
@@ -709,9 +753,13 @@ chrome.downloads.onCreated.addListener((item) => {
         return;
       }
       const filename = fallbackFilename(String(fresh.filename || item.filename || "").split(/[\\/]/).pop() || "");
-      let title = "", cookie = "";
-      try { title = (await chrome.tabs.get(item.tabId))?.title || ""; } catch {}
-      try { cookie = await cookiesForTab(item.tabId, url, fresh.cookieStoreId || item.cookieStoreId || ""); } catch {}
+      let sourceTab = null, cookie = "";
+      const sourceItem = { ...item, ...fresh };
+      try { sourceTab = await downloadSourceTab(sourceItem); } catch {}
+      const tabId = sourceTab?.id;
+      const title = sourceTab?.title || "";
+      const pageUrl = String(sourceItem.referrer || sourceTab?.url || "").slice(0, 4096);
+      try { cookie = await cookiesForTab(tabId, url, sourceItem.cookieStoreId || ""); } catch {}
       // GitHub Actions artifacts require a signed-in browser session. If its
       // cookie store cannot be identified, keep the original browser download
       // rather than sending an unauthenticated request that returns 404.
@@ -729,7 +777,7 @@ chrome.downloads.onCreated.addListener((item) => {
         {
           type: "prompt",
           url,
-          pageUrl: String(item.referrer || "").slice(0, 4096),
+          pageUrl,
           title,
           filename,
           cookie,
@@ -737,7 +785,7 @@ chrome.downloads.onCreated.addListener((item) => {
           mediaQuality: "",
           queue: ""
         },
-        { tabId: item.tabId, queue: "", useBrowserCookies: false, url, pageUrl: item.referrer || "" }
+        { tabId, queue: "", useBrowserCookies: false, url, pageUrl }
       );
       if (reply?.ok) {
         // Keep the browser record until the desktop acknowledges the handoff.

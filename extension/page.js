@@ -9,8 +9,8 @@
 // MSE playback starts.
 //
 // Everything sent to the content script is page-controlled data: it is
-// validated and classified there, and a forged record can only pollute the
-// resource list of the page that forged it.
+// validated and classified there. Download-intent events are separately
+// restricted to recognized links by the isolated content script.
 
 (() => {
   if (globalThis.__opendl_page_init__) return;
@@ -55,6 +55,56 @@
       return "";
     }
   };
+  // Unlike downloads.onCreated, this bridge runs before the browser sends
+  // the file request. A cancelled event means the isolated script has sent
+  // the URL to the existing desktop prompt. No listener means native behavior.
+  const takeDownload = (kind, value, filename = "", hasDownload = false) => {
+    try {
+      if (value == null || String(value) === "") return false;
+      const url = absolute(value);
+      if (!/^https?:/i.test(url) || url.length > 4096) return false;
+      return !document.dispatchEvent(new CustomEvent("opendl-before-download", {
+        cancelable: true,
+        detail: JSON.stringify({ kind, url, filename: String(filename).slice(0, 1024), hasDownload })
+      }));
+    } catch { return false; }
+  };
+  try {
+    const nativeClick = HTMLElement.prototype.click;
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "click");
+    Object.defineProperty(HTMLElement.prototype, "click", {
+      ...descriptor,
+      value: function () {
+        if (this instanceof HTMLAnchorElement &&
+            takeDownload("anchor", this.href, this.getAttribute("download") || "", this.hasAttribute("download"))) return;
+        return nativeClick.apply(this, arguments);
+      }
+    });
+  } catch {}
+  try {
+    const nativeOpen = window.open;
+    window.open = function (url) {
+      if (url != null && String(url) !== "" && takeDownload("open", url)) return null;
+      return nativeOpen.apply(this, arguments);
+    };
+  } catch {}
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "src");
+    if (descriptor?.set) {
+      Object.defineProperty(HTMLIFrameElement.prototype, "src", {
+        ...descriptor,
+        set(value) {
+          if (takeDownload("frame", value)) return;
+          return descriptor.set.call(this, value);
+        }
+      });
+    }
+    const nativeSetAttribute = Element.prototype.setAttribute;
+    Element.prototype.setAttribute = function (name, value) {
+      if (this instanceof HTMLIFrameElement && String(name).toLowerCase() === "src" && takeDownload("frame", value)) return;
+      return nativeSetAttribute.apply(this, arguments);
+    };
+  } catch {}
   const mimeOf = (ct) => String(ct || "").split(";", 1)[0].trim().toLowerCase();
   const playlistMimeOf = (ct) => {
     const mime = mimeOf(ct);

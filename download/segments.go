@@ -1,6 +1,7 @@
 package download
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -18,13 +19,37 @@ type Segment struct {
 
 type segmentProgress struct {
 	start, end       int64
+	created          time.Time  // immutable monotonic origin for request/body timing
+	splitMu          sync.Mutex // protects the exclusive write limit while a range is split
+	writeLimit       int64      // exclusive; only used by ranged offset writers
 	done             atomic.Int64
 	active           atomic.Bool
+	bodyReady        atomic.Bool  // response semantics are known; false while dialing, authenticating or retrying
+	bodyStarted      atomic.Int64 // monotonic nanosecond offset from created; zero until a body is ready
+	routeEpoch       atomic.Uint64
 	integrityPending atomic.Bool // an auth-int response must reach EOF intact
 	written          atomic.Int64
 	speed            atomic.Int64
 	lastSample       time.Time // guarded by Task.segmentMu
 	lastBytes        int64     // guarded by Task.segmentMu
+}
+
+func (t *Task) hasHealthyRange(except *segmentProgress) bool {
+	t.segmentMu.Lock()
+	defer t.segmentMu.Unlock()
+	epoch := t.rangeRouteEpoch.Load()
+	if except != nil {
+		epoch = except.routeEpoch.Load()
+	}
+	for _, segment := range t.segments {
+		if t.conns == -1 && segment.routeEpoch.Load() != epoch {
+			continue
+		}
+		if segment != except && segment.active.Load() && segment.bodyReady.Load() && segment.done.Load() > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func (t *Task) resetSegments(completed []chunkSpan) {
@@ -39,7 +64,8 @@ func (t *Task) resetSegments(completed []chunkSpan) {
 }
 
 func (t *Task) startSegment(c chunkSpan) *segmentProgress {
-	segment := &segmentProgress{start: c.start, end: c.end, lastSample: time.Now()}
+	now := time.Now()
+	segment := &segmentProgress{start: c.start, end: c.end, created: now, writeLimit: c.end + 1, lastSample: now}
 	segment.active.Store(true)
 	t.segmentMu.Lock()
 	t.segments = append(t.segments, segment)

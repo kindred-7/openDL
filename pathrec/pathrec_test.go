@@ -6,8 +6,7 @@ import (
 	"unicode/utf8"
 )
 
-// The cases below are the "special paths" 参考下载器 recognizes and a strict
-// RFC 3986 tokenizer (what a plain downloader such as fluxdown uses) drops.
+// Cover URL paths containing Unicode, spaces and common filename delimiters.
 func TestExtractURLsSpecialPaths(t *testing.T) {
 	text := strings.Join([]string{
 		`下载地址: https://mirror.example.cn/下载/年度报告.zip 提取码 8888`,
@@ -35,7 +34,7 @@ func TestExtractURLsSpecialPaths(t *testing.T) {
 }
 
 func TestExtractURLsStopsBeforeProse(t *testing.T) {
-	// 参考下载器's lookahead stops a path at "word:" so prose does not become URL.
+	// Stop before a prose label so surrounding text does not become URL data.
 	got := ExtractURLs(`See https://example.com/a/b file: it works`)
 	if len(got) != 1 || got[0] != "https://example.com/a/b" {
 		t.Fatalf("got %q", got)

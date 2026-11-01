@@ -6,10 +6,8 @@ import (
 	"strings"
 )
 
-// SiteRule is one entry of 参考下载器's per-site rule table: the rules the native
-// side sends to the browser content script. A rule names a host pattern, a
-// path pattern (regular expression) and an optional extension filter. This is
-// how 参考下载器 recognizes download paths that carry no file extension at all.
+// SiteRule describes a host pattern, path expression and optional extension
+// filter, including download paths without a file extension.
 type SiteRule struct {
 	Tag      string   `json:"tag"`                // human label, e.g. "youtube-watch"
 	Host     string   `json:"host"`               // host regexp, optional anchors ^...$ allowed

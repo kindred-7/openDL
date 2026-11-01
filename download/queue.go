@@ -13,6 +13,7 @@ type queueTicket struct {
 
 // enqueueLocked establishes ordering while the caller still holds m.mu.
 func (m *Manager) enqueueLocked(t *Task) *queueTicket {
+	t.workers.Add(1)
 	ticket := &queueTicket{ready: make(chan struct{}), cancel: t.cancel, queue: t.queue, task: t}
 	t.ticket = ticket
 	m.waiting = append(m.waiting, ticket)

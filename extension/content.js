@@ -1,8 +1,7 @@
 // opendl content script: page resource sniffing.
 //
-// The URL tokenizer is the permissive one reconstructed from 参考下载器's content
-// script (pathrec/extract.go documents it): paths with spaces, semicolons,
-// tildes and non-ASCII text stay intact, which strict RFC parsers drop.
+// Keep spaces, semicolons, tildes and non-ASCII text intact in download paths.
+// The native URL tokenizer follows the same rules in pathrec/extract.go.
 
 (() => {
   if (window.__opendl_init__) return;
@@ -183,7 +182,7 @@
   // ---- site rules ----------------------------------------------------------
   // Site rules recognize download paths that carry no file extension. They
   // come from the desktop's rules file through the background and follow the
-  // expansion 参考下载器's content script uses: a "^/" pattern matches both the bare
+  // same expansion as the native matcher: a "^/" pattern matches both the bare
   // path and the full address.
   let siteRulesCompiled = [];
   let siteRulesAt = 0;
@@ -499,6 +498,45 @@
     attributeFilter: ["src", "href", "data", "srcset", "download"]
   });
 
+  const isNASTokenDownload = (value) => {
+    try {
+      const url = new URL(value);
+      return url.origin === location.origin && url.pathname === "/multiple-download" && Boolean(url.searchParams.get("token"));
+    } catch { return false; }
+  };
+  const matchesDownloadLink = (url, hasDownload) => hasDownload || DOWNLOAD_EXT.has(extOf(url)) ||
+    Boolean(matchSiteRule(url)) || isNASTokenDownload(url);
+  const sendLinkTakeover = (url, filename) => chrome.runtime.sendMessage({
+    type: "takeoverLink", url, pageUrl: location.href,
+    title: document.title || "", filename
+  });
+  const reportTakeover = (request) => {
+    request.then((reply) => {
+      if (!reply?.ok && contextActive()) window.alert(reply?.reason || extensionMessage("m_hover_uncertain"));
+    }).catch(() => { if (contextActive()) window.alert(extensionMessage("m_hover_uncertain")); });
+  };
+
+  // The MAIN-world hook asks synchronously before a script starts navigation.
+  // Treat its data as untrusted: only recognized HTTP(S) downloads qualify,
+  // and the background derives credentials from the actual sender tab.
+  document.addEventListener("opendl-before-download", (event) => {
+    try {
+      if (!contextActive() || !clickTakeoverEnabled || !event.cancelable ||
+          typeof event.detail !== "string" || event.detail.length > 8192) return;
+      const data = JSON.parse(event.detail);
+      if (!data || !["anchor", "open", "frame"].includes(data.kind) ||
+          typeof data.url !== "string" || data.url.length > 4096 || !/^https?:/i.test(data.url)) return;
+      // A frame may be a document viewer, so only intercept the known NAS
+      // token endpoint there, never arbitrary embedded PDF/media documents.
+      if (data.kind === "frame" ? !isNASTokenDownload(data.url) :
+          !matchesDownloadLink(data.url, data.kind === "anchor" && data.hasDownload === true)) return;
+      const filename = typeof data.filename === "string" ? data.filename.slice(0, 1024) : "";
+      const request = sendLinkTakeover(data.url, filename);
+      event.preventDefault();
+      reportTakeover(request);
+    } catch {}
+  });
+
   fullScan();
 
   // Keep this cached because the browser's default action must be prevented
@@ -515,9 +553,9 @@
     }
   });
 
-  // Browser click takeover helpers: Alt+click forces a link through the
-  // desktop app without ever starting a browser download, and Shift+click
-  // releases one URL so the background keeps the browser download.
+  // Capture user clicks and script-dispatched clicks on connected anchors.
+  // Detached anchor.click() calls are covered by the MAIN-world bridge above.
+  // Alt+click forces takeover; Shift+click releases one browser download.
   document.addEventListener(
     "click",
     (event) => {
@@ -531,18 +569,13 @@
           chrome.runtime.sendMessage({ type: "releaseDownload", url }).catch(() => {});
           return;
         }
-        if (!event.isTrusted || event.ctrlKey || event.metaKey) return;
-        const matches = anchor.hasAttribute("download") || DOWNLOAD_EXT.has(extOf(url)) || Boolean(matchSiteRule(url));
+        if (event.ctrlKey || event.metaKey) return;
+        const matches = matchesDownloadLink(url, anchor.hasAttribute("download"));
         if (!event.altKey && (!clickTakeoverEnabled || !matches)) return;
-        const request = chrome.runtime.sendMessage({
-          type: "takeoverLink", url, pageUrl: location.href,
-          title: document.title || "", filename: anchor.getAttribute("download") || ""
-        });
+        const request = sendLinkTakeover(url, anchor.getAttribute("download") || "");
         event.preventDefault();
         event.stopImmediatePropagation();
-        request.then((reply) => {
-          if (!reply?.ok && contextActive()) window.alert(reply?.reason || extensionMessage("m_hover_uncertain"));
-        }).catch(() => { if (contextActive()) window.alert(extensionMessage("m_hover_uncertain")); });
+        reportTakeover(request);
       } catch {}
     },
     true

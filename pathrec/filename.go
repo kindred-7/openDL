@@ -12,7 +12,7 @@ import (
 	"golang.org/x/text/encoding/htmlindex"
 )
 
-// Source carries everything 参考下载器 considers when naming a download.
+// Source carries response and page metadata used to name a download.
 type Source struct {
 	URL                string
 	ContentDisposition string
@@ -21,7 +21,7 @@ type Source struct {
 	SiteLabel          string // second-level domain label, used to clean titles
 }
 
-// DeriveFilename derives a Windows-safe filename like 原始程序 does:
+// DeriveFilename derives a Windows-safe filename:
 // Content-Disposition first (RFC 5987 filename*, then RFC 2047 encoded
 // words), then the last URL path segment (percent-decoded, charset-aware),
 // then the cleaned page title, and finally a generated name from the MIME
@@ -30,8 +30,7 @@ func DeriveFilename(s Source) string {
 	ext := extFromMIME(s.ContentType)
 	finish := func(name string) string {
 		name = sanitizeWindows(name)
-		// 参考下载器 appends the extension from the response type when the name
-		// derived from the path or title has none.
+		// Append the response type's extension when the derived name has none.
 		if ext != "" && !strings.Contains(name, ".") {
 			name = sanitizeWindows(name + ext)
 		}
@@ -60,8 +59,7 @@ func SanitizeFilename(name string) string { return sanitizeWindows(name) }
 
 // FromContentDisposition extracts the filename parameter of a
 // Content-Disposition header, decoding RFC 5987 filename* values and RFC 2047
-// encoded words. These are the "=?UTF-8?B?..?=" and "utf-8”..." forms the
-// 原始程序 header parser carries in its string table.
+// encoded words.
 func FromContentDisposition(cd string) string {
 	cd = strings.TrimSpace(cd)
 	if cd == "" {
@@ -136,9 +134,7 @@ func unquote(v string) string {
 	return v
 }
 
-// decodeRFC5987 decodes charset'language'percent-encoded values, the
-// filename* form (RFC 5987) 参考下载器 supports charsets for: utf-8, windows-1252
-// and ISO-8859-1 appear in its parser's string table.
+// decodeRFC5987 decodes charset'language'percent-encoded filename* values.
 func decodeRFC5987(v string) string {
 	v = unquote(v)
 	i := strings.IndexByte(v, '\'')
@@ -171,9 +167,8 @@ func decodeEncodedWords(v string) string {
 	return decoded
 }
 
-// FromURLPath takes the last path segment of a URL and percent-decodes it the
-// way 原始程序 does: bytes are read as UTF-8 when valid, otherwise as
-// windows-1252 / ISO-8859-1.
+// FromURLPath percent-decodes the last URL path segment, using UTF-8 when
+// valid and otherwise falling back to windows-1252 / ISO-8859-1.
 func FromURLPath(rawURL string) string {
 	u, err := url.Parse(strings.TrimSpace(rawURL))
 	if err != nil {
@@ -190,7 +185,7 @@ func FromURLPath(rawURL string) string {
 }
 
 // stripSessionParams drops ";jsessionid=.." style suffixes, keeping other
-// semicolons: Windows filenames may contain them and 参考下载器 keeps them.
+// semicolons, which may be part of Windows filenames.
 func stripSessionParams(seg string) string {
 	for _, key := range []string{";jsessionid=", ";sid=", ";phpsessid="} {
 		if i := strings.Index(strings.ToLower(seg), key); i > 0 {

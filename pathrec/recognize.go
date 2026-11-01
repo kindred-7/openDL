@@ -18,9 +18,8 @@ type Options struct {
 }
 
 // Recognize extracts download paths from text and derives their filenames.
-// It is the reconstruction of the pipeline 参考下载器 runs: extract every URL the
-// permissive tokenizer sees, mark the ones hitting the special-path mask
-// table, tag rule-matched paths, then derive names.
+// It extracts URLs, marks excluded paths and site-rule matches, then derives
+// filenames from the available metadata.
 func Recognize(text string, opt Options) []Candidate {
 	var out []Candidate
 	for _, u := range ExtractURLs(text) {

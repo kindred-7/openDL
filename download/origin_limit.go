@@ -5,19 +5,21 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"time"
 )
 
 // originTransport limits concurrent HTTP responses per origin across tasks.
 // A slot remains held until the response body is consumed or closed. The
 // optional limiter additionally caps concurrent responses across every origin.
 type originTransport struct {
-	base    http.RoundTripper
-	limit   int
-	before  func(context.Context, string) error
-	cooling func(string) bool
-	limiter *connLimiter
-	mu      sync.Mutex
-	gates   map[string]*originGate
+	base      http.RoundTripper
+	limit     int
+	siteLimit func(string) int // optional; actual transfer origin, including redirect destinations
+	before    func(context.Context, string) error
+	cooling   func(string) bool
+	limiter   *connLimiter
+	mu        sync.Mutex
+	gates     map[string]*originGate
 }
 
 type originGate struct {
@@ -27,6 +29,29 @@ type originGate struct {
 
 func (t *originTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.roundTrip(req, t.base)
+}
+
+// effectiveLimit preserves zero-as-unlimited for standalone transports. A
+// matching site rule can only lower the transport's configured origin cap.
+func (t *originTransport) effectiveLimit(origin string) int {
+	limit := t.limit
+	if t.siteLimit != nil {
+		if site := t.siteLimit(origin); site > 0 && (limit <= 0 || site < limit) {
+			limit = site
+		}
+	}
+	return limit
+}
+
+// refreshLimits wakes already queued callers when a rule is raised or removed.
+// A lower cap takes effect as active responses release their slots; healthy
+// responses remain intact. Callers must release configuration locks first.
+func (t *originTransport) refreshLimits() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for origin, gate := range t.gates {
+		gate.slots.setLimit(t.effectiveLimit(origin))
+	}
 }
 
 // roundTrip shares the existing gates with an isolated authentication route.
@@ -39,9 +64,11 @@ func (t *originTransport) roundTrip(req *http.Request, base http.RoundTripper) (
 	gate := t.gates[origin]
 	if gate == nil {
 		gate = &originGate{slots: newConnLimiter()}
-		gate.slots.setLimit(t.limit)
 		t.gates[origin] = gate
 	}
+	// Refresh on every acquisition too, so newly arriving requests never use
+	// an old gate limit while a settings update is publishing its refresh.
+	gate.slots.setLimit(t.effectiveLimit(origin))
 	gate.users++
 	t.mu.Unlock()
 
@@ -92,7 +119,9 @@ func (t *originTransport) roundTrip(req *http.Request, base http.RoundTripper) (
 		release()
 		unlock()
 	}
+	started := time.Now()
 	resp, err := base.RoundTrip(req)
+	observeRangeRequest(req.Context(), started)
 	if err != nil || resp == nil || resp.Body == nil {
 		releaseAll()
 		return resp, err

@@ -70,7 +70,9 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 		return false, fmt.Errorf(i18n.T("请先暂停任务，再更新下载信息"))
 	}
 	t.editing = true
+	t.workers.Add(1)
 	m.mu.Unlock()
+	defer t.workers.Done()
 	defer func() { m.mu.Lock(); t.editing = false; m.mu.Unlock() }()
 
 	t.checkpointMu.Lock()

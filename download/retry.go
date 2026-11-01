@@ -193,6 +193,19 @@ func (m *Manager) doWithRetry(t *Task, req *http.Request) (*http.Response, error
 			}
 			err = &httpStatusError{code: resp.StatusCode, retryAfter: retryAfter(resp.Header.Get("Retry-After"), time.Now())}
 			responseBody = resp.Body
+			if timing, ok := req.Context().Value(rangeRequestTimingKey{}).(*rangeRequestTiming); ok &&
+				timing.task != nil && timing.task.conns == -1 &&
+				(resp.StatusCode == 403 || resp.StatusCode == 429 || resp.StatusCode == 503) && timing.task.hasHealthyRange(timing.segment) {
+				// An extra request was rejected while valid old bodies still
+				// progress. Hand this to the coordinator immediately instead of
+				// spending the whole generic retry budget at the old concurrency.
+				status := err.(*httpStatusError)
+				if status.code == 429 || status.code == 503 {
+					m.delayOrigin(responseOrigin, max(2*time.Second, status.retryAfter))
+				}
+				responseBody.Close()
+				return nil, &connectionRefusalError{err: err}
+			}
 		}
 		if !transientError(err) {
 			if responseBody != nil {

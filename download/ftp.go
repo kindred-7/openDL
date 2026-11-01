@@ -1,7 +1,7 @@
 package download
 
-// FTP 支持：单连接流式下载，REST 从检查点续传，SIZE/MDTM 作为弱版本标识。
-// FTPS、代理链路与多连接分段不在本实现范围；任务记录不保存登录口令。
+// FTP/FTPS 使用 SIZE/MDTM 识别资源，支持流式续传和有条件的分段下载。
+// 任务记录不保存登录口令。
 
 import (
 	"bufio"
@@ -195,6 +195,10 @@ type ftpSource struct {
 // downloadFTPRange 用独立 FTP 控制连接取回一个区间：REST 从区间起点读到本
 // 连接结束，只收前 size 字节；MDTM 与校验不符时报资源变化。
 func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, start, end int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error) {
+	if segment != nil {
+		segment.bodyReady.Store(false)
+		defer segment.bodyReady.Store(false)
+	}
 	if splitCtx == nil {
 		splitCtx = context.Background()
 	}
@@ -203,6 +207,10 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 		return 0, err
 	}
 	defer release()
+	requestStarted := time.Now()
+	if segment != nil {
+		segment.routeEpoch.Store(m.autoConnRouteEpoch.Load())
+	}
 	ctx, cancel := context.WithCancel(splitCtx)
 	defer cancel()
 	var dialer net.Dialer
@@ -210,6 +218,9 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 	if err != nil {
 		return 0, &responseReadError{err: err}
 	}
+	controlSocket := control
+	stopControl := context.AfterFunc(ctx, func() { _ = controlSocket.Close() })
+	defer stopControl()
 	defer func() { _ = control.Close() }()
 	if source.implicitTLS {
 		if control, err = wrapFTPTLS(ctx, control, source.address.Hostname()); err != nil {
@@ -237,8 +248,14 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 	} else if reply.code != 200 {
 		return 0, fmt.Errorf(i18n.T("FTP 服务器拒绝二进制传输：%d %s"), reply.code, reply.text)
 	}
-	if stamp, ok := ftp.modified(source.path); ok && validator != "" && stamp != validator {
-		return 0, fmt.Errorf(i18n.T("下载期间服务器文件已改变"))
+	if validator != "" {
+		stamp, ok := ftp.modified(source.path)
+		if !ok {
+			return 0, fmt.Errorf(i18n.T("无法确认 FTP 服务器文件的修改时间"))
+		}
+		if stamp != validator {
+			return 0, fmt.Errorf(i18n.T("下载期间服务器文件已改变"))
+		}
 	}
 	size := end - start + 1
 	if reply, err := ftp.command("REST %d", start); err != nil {
@@ -254,6 +271,9 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 	if err != nil {
 		return 0, &responseReadError{err: err}
 	}
+	dataSocket := data
+	stopData := context.AfterFunc(ctx, func() { _ = dataSocket.Close() })
+	defer stopData()
 	defer data.Close()
 	if ftp.secure {
 		if data, err = wrapFTPTLS(ctx, data, source.address.Hostname()); err != nil {
@@ -267,13 +287,22 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 	if reply.code != 150 && reply.code != 125 {
 		return 0, fmt.Errorf(i18n.T("FTP 取回文件失败：%d %s"), reply.code, reply.text)
 	}
-	reader := idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel}
+	if segment != nil {
+		t.rangeBodyReady(segment, time.Since(requestStarted))
+	}
+	reader := idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel,
+		selectTimeout: func() time.Duration { return m.automaticBodyTimeout(t, segment) }}
 	// FTP 的 REST 读到文件末尾；只收本区间长度后关闭数据连接。
 	written, err := m.copyWithProgressCancel(t, &offsetWriter{f: out, off: start, segment: segment}, io.LimitReader(reader, size), splitCtx.Done())
 	if err == nil && written != size {
 		err = &responseReadError{err: fmt.Errorf(i18n.T("分段数据不完整：%d，预期 %d: %w"), written, size, io.ErrUnexpectedEOF)}
 	}
-	_, _ = ftp.command("QUIT")
+	// REST transfers run to EOF on the server; close the data channel before
+	// attempting QUIT so a bounded range does not leave the server writing.
+	_ = data.Close()
+	if ctx.Err() == nil {
+		_, _ = ftp.command("QUIT")
+	}
 	return written, err
 }
 
@@ -417,6 +446,32 @@ func (m *Manager) downloadFTP(t *Task) error {
 	// 有可靠版本标识的已知大小文件走动态分段，与 HTTP 范围共享同一驱动；
 	// 其余场景单连接流式下载，REST 从检查点续传。
 	if total > 0 && validator != "" && (t.conns > 1 || t.conns == -1) {
+		info, statErr := os.Stat(extendedPath(part))
+		resource := resourceFingerprint(address)
+		t.checkpointMu.Lock()
+		t.metaMu.Lock()
+		failedChecksum, expected := t.failedSHA256, t.expectedSHA256
+		t.failedSHA256 = ""
+		t.metaMu.Unlock()
+		invalidated := failedChecksum != "" && (expected == failedChecksum || expected == "")
+		if invalidated || t.resumeTotal != total || t.resumeValidator != validator || t.resumeResource != resource || statErr != nil || info.Size() != total {
+			t.completed = nil
+			t.done.Store(0)
+		} else {
+			var done int64
+			for _, chunk := range t.completed {
+				done += chunk.end - chunk.start + 1
+			}
+			t.done.Store(done)
+		}
+		t.resumeTotal, t.resumeValidator, t.resumeResource = total, validator, resource
+		t.resumeStableResource, t.resumeUnverified = "", false
+		saveErr := m.saveTaskLocked(t)
+		t.checkpointMu.Unlock()
+		if saveErr != nil {
+			return fmt.Errorf(i18n.T("无法保存下载记录：%w"), saveErr)
+		}
+		t.total.Store(total)
 		source := ftpSource{
 			address:     address,
 			host:        host,
@@ -426,7 +481,7 @@ func (m *Manager) downloadFTP(t *Task) error {
 			implicitTLS: implicitTLS,
 			explicitTLS: scheme == "ftps" && !implicitTLS,
 		}
-		return m.downloadSplit(t, part, total, validator, func(out *os.File, start, end int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error) {
+		return m.downloadSplit(t, part, total, validator, "", func(out *os.File, start, end int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error) {
 			return m.downloadFTPRange(t, source, out, start, end, validator, segment, splitCtx)
 		})
 	}
