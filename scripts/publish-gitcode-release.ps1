@@ -80,8 +80,8 @@ function Get-GitCodeResource([string]$Uri, [string]$Description, [switch]$AllowM
 }
 # Use curl's bounded connection and low-speed timeouts. Pass signed URLs and
 # headers through stdin, never through process arguments or diagnostic output.
-$curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue
-if (-not $curl) { $curl = Get-Command curl -CommandType Application -ErrorAction Stop }
+$curl = Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+if (-not $curl) { $curl = Get-Command curl -CommandType Application -ErrorAction Stop | Select-Object -First 1 }
 function ConvertTo-CurlConfigValue([string]$Value) {
     if ($Value -match '[\r\n\x00]') { throw 'Invalid upload configuration value.' }
     return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
