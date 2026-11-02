@@ -10,7 +10,7 @@ import (
 
 func (pg *mainPage) applicationMenu(c *ui.Context, p *d1Palette) {
 	c.Key("application-menu")
-	button := ui.ButtonBase(c).Size(28, 28).Radius(style.RadiusSM).Center().
+	button := ui.ButtonBase(c).Size(28, 28).Radius(style.RadiusSM).Center().Cursor(ui.CursorPointer).
 		Role(ui.RoleMenuButton).Label(tr("应用菜单")).Tooltip(tr("应用菜单")).Expanded(pg.showAppMenu)
 	if button.Hovered() || button.FocusVisible() || pg.showAppMenu {
 		button.Background(p.hover)

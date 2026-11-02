@@ -357,7 +357,7 @@ func (pg *mainPage) columnMenuButton(c *ui.Context, p *d1Palette) ui.Element {
 				}
 				row.Children(func() {
 					c.Key("visibility")
-					item := ui.CheckboxBase(c, &on).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(32).Padding(0, 8).Gap(8).AlignItems(ui.Center).Radius(5).
+					item := ui.CheckboxBase(c, &on).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(32).Padding(0, 8).Gap(8).AlignItems(ui.Center).Radius(5).Cursor(ui.CursorPointer).
 						Label(tr(spec.title)).Disabled(id == "name")
 					if item.Hovered() || item.FocusVisible() {
 						item.Background(p.hover)

@@ -50,7 +50,7 @@ async function refreshConnection() {
     }
     const themeMissing = connected && !validTheme(result.theme);
     connectionEl.title = themeMissing
-      ? (english ? "Theme sync failed" : "主题同步失败") : "";
+      ? (english ? "Theme sync failed" : "主题同步失败") : (!connected ? (result?.reason || "") : "");
     setConnectionText(connected ? (english ? "Connected" : localize("已连接")) : (english ? "Disconnected" : localize("未连接")));
     connectionEl.dataset.state = connected ? "connected" : "disconnected";
   } catch {

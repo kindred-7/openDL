@@ -1,7 +1,8 @@
 {
   "m_sniff_formats": { "message": "自定义嗅探格式" },
   "m_sniff_formats_placeholder": { "message": "例如：mobi, epub, psd" },
-  "m_sniff_formats_hint": { "message": "追加格式，用逗号或空格分隔；不影响下载接管。" },
+  "m_sniff_formats_hint": { "message": "追加格式，用逗号、空格或换行分隔；不影响下载接管。" },
+  "m_format_separators_hint": { "message": "用逗号、空格或换行分隔。" },
   "m_sniff_formats_save": { "message": "保存嗅探格式" },
   "m_sniff_formats_retry": { "message": "重试读取嗅探设置" },
   "m_sniff_formats_read_failed": { "message": "无法读取嗅探格式" },

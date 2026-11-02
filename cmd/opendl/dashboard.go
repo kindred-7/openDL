@@ -24,14 +24,14 @@ import (
 // ── shared controls ──────────────────────────────────────────────────────
 
 func flatButton(c *ui.Context, label string, padY, padX float32) ui.Element {
-	return ui.ButtonBase(c).Padding(padY, padX).Radius(8).Children(func() {
+	return ui.ButtonBase(c).Padding(padY, padX).Radius(8).Cursor(ui.CursorPointer).Children(func() {
 		ui.Text(c, tr(label)).FontSize(13)
 	})
 }
 
 // toolButton is a secondary button with a leading icon ("暂停", "删除"...).
 func toolButton(c *ui.Context, p *style.Palette, icon, label string) ui.Element {
-	return ui.ButtonBase(c).Padding(6, 10).Radius(8).Border(1, p.Border).Children(func() {
+	return ui.ButtonBase(c).Padding(6, 10).Radius(8).Border(1, p.Border).Cursor(ui.CursorPointer).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			style.Icon(c, icon, 14, p.TextSoft)
 			ui.Text(c, tr(label)).FontSize(12)
@@ -41,7 +41,7 @@ func toolButton(c *ui.Context, p *style.Palette, icon, label string) ui.Element 
 
 // iconButton is an icon-only button; active items get a pressed fill.
 func iconButton(c *ui.Context, p *style.Palette, icon string, active bool) ui.Element {
-	btn := ui.ButtonBase(c).Padding(8).Radius(8)
+	btn := ui.ButtonBase(c).Padding(8).Radius(8).Cursor(ui.CursorPointer)
 	if active {
 		btn = btn.Background(p.Surface2)
 	}
@@ -52,13 +52,13 @@ func iconButton(c *ui.Context, p *style.Palette, icon string, active bool) ui.El
 
 // smallIconButton is the 16px variant used inside table rows.
 func smallIconButton(c *ui.Context, p *style.Palette, icon string) ui.Element {
-	return ui.ButtonBase(c).Padding(4).Radius(6).Children(func() {
+	return ui.ButtonBase(c).Padding(4).Radius(6).Cursor(ui.CursorPointer).Children(func() {
 		style.Icon(c, icon, 14, p.TextSoft)
 	})
 }
 
 func primaryActionButton(c *ui.Context, p *style.Palette, label string) ui.Element {
-	return ui.ButtonBase(c).Padding(8, 14).Radius(8).Background(p.Primary).
+	return ui.ButtonBase(c).Padding(8, 14).Radius(8).Background(p.Primary).Cursor(ui.CursorPointer).
 		Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 				style.Icon(c, style.IconPlus, 15, p.OnPrimary)
@@ -188,7 +188,7 @@ func (a *app) sidebar(c *ui.Context, p *style.Palette) {
 		for i, it := range navItems {
 			i, it := i, it
 			active := a.nav == i
-			row := ui.ButtonBase(c).Padding(9, 12).Radius(10).FillWidth()
+			row := ui.ButtonBase(c).Padding(9, 12).Radius(10).FillWidth().Cursor(ui.CursorPointer)
 			if active {
 				row = row.Background(style.BadgeBlueBg)
 			}
@@ -427,7 +427,7 @@ func (a *app) tabRow(c *ui.Context, p *style.Palette, snaps []download.Snapshot)
 				}
 			}
 			active := a.tab == i
-			item := ui.ButtonBase(c).Padding(8, 12).Radius(8)
+			item := ui.ButtonBase(c).Padding(8, 12).Radius(8).Cursor(ui.CursorPointer)
 			if active {
 				item = item.Background(style.BadgeBlueBg)
 			}
@@ -866,7 +866,7 @@ func hashRow(c *ui.Context, p *style.Palette, a *app, label, value string) {
 
 func switchRow(c *ui.Context, p *style.Palette, on *bool, label, hint string) {
 	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		ui.Switch(c, on)
+		ui.Switch(c, on).Cursor(ui.CursorPointer)
 		ui.Text(c, tr(label)).FontSize(12)
 		ui.Text(c, tr(hint)).FontSize(11).TextColor(p.TextFaint)
 	})

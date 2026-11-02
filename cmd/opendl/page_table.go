@@ -291,7 +291,7 @@ func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns
 						cb.OnClick(func() { pg.selectVisibleRows(rows, false) })
 					})
 					ui.Box(c).Width(10)
-					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(tr("按名称排序"))
+					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(tr("按名称排序")).Cursor(ui.CursorPointer)
 					b.Children(func() {
 						ui.Text(c, tr("名称")).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
 						if !pg.preferences.ManualTaskSort {
@@ -659,7 +659,7 @@ func (pg *mainPage) rowActions(c *ui.Context, p *d1Palette, r d1Row, reveal bool
 // framework's keyboard focus ring provide feedback without a button surface.
 func rowActionButton(c *ui.Context, p *d1Palette, key, label, icon string, enabled bool) ui.Element {
 	c.Key(key)
-	button := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Disabled(!enabled)
+	button := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Cursor(ui.CursorPointer).Disabled(!enabled)
 	hovered := enabled && button.Hovered()
 	pressed := enabled && button.Pressed()
 	color := p.mu

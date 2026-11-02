@@ -1,7 +1,8 @@
 {
   "m_sniff_formats": { "message": "Custom resource formats" },
   "m_sniff_formats_placeholder": { "message": "For example: mobi, epub, psd" },
-  "m_sniff_formats_hint": { "message": "Add formats separated by commas or spaces; download takeover is unchanged." },
+  "m_sniff_formats_hint": { "message": "Add formats separated by commas, spaces or line breaks; download takeover is unchanged." },
+  "m_format_separators_hint": { "message": "Separate formats with commas, spaces or line breaks." },
   "m_sniff_formats_save": { "message": "Save resource formats" },
   "m_sniff_formats_retry": { "message": "Retry loading formats" },
   "m_sniff_formats_read_failed": { "message": "Could not load resource formats" },

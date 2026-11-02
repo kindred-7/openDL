@@ -444,16 +444,20 @@ func (pg *mainPage) onChange() {
 		}
 		pg.histMu.Lock()
 		h := pg.hist[s.ID]
-		sample := speedSample{at: now, bytesPerSecond: float64(s.Speed)}
-		if len(h) > 0 && h[len(h)-1].at.Unix() == now.Unix() {
-			h[len(h)-1] = sample
-		} else {
-			h = append(h, sample)
+		was, seen := pg.prev[s.ID]
+		// 保持完成的下载不再追加采样：速度曲线驻留在完成时刻。
+		if !(seen && was == download.Done && s.State == download.Done) {
+			sample := speedSample{at: now, bytesPerSecond: float64(s.Speed)}
+			if len(h) > 0 && h[len(h)-1].at.Unix() == now.Unix() {
+				h[len(h)-1] = sample
+			} else {
+				h = append(h, sample)
+			}
+			if len(h) > 60 {
+				h = h[len(h)-60:]
+			}
+			pg.hist[s.ID] = h
 		}
-		if len(h) > 60 {
-			h = h[len(h)-60:]
-		}
-		pg.hist[s.ID] = h
 		// completed 只在观察到向 Done 的迁移时成立：恢复的已完成任务首次
 		// 出现时不发通知，避免启动时补发历史完成。
 		completed := false
@@ -674,7 +678,7 @@ func (pg *mainPage) titleBar(c *ui.Context, p *d1Palette) {
 			searchFocused = pg.searchHandle.Focused(c)
 			if pg.query != "" {
 				c.Key("clear-task-search")
-				clear := ui.ButtonBase(c).Size(20, 20).Shrink(0).Radius(style.RadiusSM).Center().Label(tr("清除搜索")).Tooltip(tr("清除搜索"))
+				clear := ui.ButtonBase(c).Size(20, 20).Shrink(0).Radius(style.RadiusSM).Center().Label(tr("清除搜索")).Tooltip(tr("清除搜索")).Cursor(ui.CursorPointer)
 				hoverMotion(clear, ui.Transparent, p.hover)
 				clear.Children(func() { d1Icon(c, "x", 14, p.mu) })
 				clear.OnClick(func() { pg.query = ""; pg.focus = "d1search" })
@@ -708,7 +712,7 @@ func (pg *mainPage) sidebarToggle(c *ui.Context, p *d1Palette) {
 	if pg.panes.SidebarCollapsed {
 		label = "展开侧栏"
 	}
-	toggle := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().
+	toggle := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Cursor(ui.CursorPointer).
 		Role(ui.RoleToggleButton).Label(tr(label)).Tooltip(tr(label)).Checked(!pg.panes.SidebarCollapsed).Expanded(!pg.panes.SidebarCollapsed)
 	hoverMotion(toggle, ui.Transparent, p.sel)
 	color := p.mu
@@ -784,7 +788,7 @@ func d1Button(c *ui.Context, p *d1Palette, label, icon string, enabled ...bool) 
 func d1ButtonIcon(c *ui.Context, p *d1Palette, label, icon string, iconCol ui.Color, enabled ...bool) ui.Element {
 	c.Key(label)
 	ok := len(enabled) == 0 || enabled[0]
-	e := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd).Center().Disabled(!ok)
+	e := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd).Center().Cursor(ui.CursorPointer).Disabled(!ok)
 	col, textCol := iconCol, p.fg
 	if !ok {
 		col, textCol = p.mu, p.mu
@@ -809,7 +813,7 @@ func (pg *mainPage) themeIconButton(c *ui.Context, p *d1Palette) ui.Element {
 	if pg.dark {
 		target = 1
 	}
-	button := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().
+	button := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Cursor(ui.CursorPointer).
 		Label(tr("切换主题")).Tooltip(tr("切换主题"))
 	hoverMotion(button, ui.Transparent, p.hover)
 	turn := button.Animate("theme-flip", target, 220*time.Millisecond)
@@ -847,7 +851,7 @@ func absFloat32(v float32) float32 {
 
 func d1IconButton(c *ui.Context, p *d1Palette, name string) ui.Element {
 	label := map[string]string{"sun": "切换主题", "play": "继续", "pause": "暂停", "stop": "全部停止", "folder": "打开所在文件夹", "trash": "删除", "cog": "设置", "panel-right": "右侧详情栏", "panel-bottom": "底部详情面板", "close": "收起详情", "dots": "更多操作", "copy": "复制日志"}[name]
-	e := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label))
+	e := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Cursor(ui.CursorPointer)
 	hoverMotion(e, ui.Transparent, p.hover)
 	e.Children(func() {
 		d1Icon(c, name, 16, p.mu)
@@ -875,7 +879,7 @@ func (pg *mainPage) markCopied(key string) {
 
 func d1CopyControl(c *ui.Context, p *d1Palette, key, label string, copied, iconOnly, enabled bool) ui.Element {
 	c.Key(key)
-	button := ui.ButtonBase(c).Height(style.HeightButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Disabled(!enabled)
+	button := ui.ButtonBase(c).Height(style.HeightButton).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Cursor(ui.CursorPointer).Disabled(!enabled)
 	if iconOnly {
 		button.Size(22, 22)
 	} else {
@@ -1403,7 +1407,7 @@ func (pg *mainPage) taskColumn(c *ui.Context, p *d1Palette) {
 // Keep the checkbox in the layout/input tree; reveal only its painting.
 // Selected/mixed state and keyboard focus remain visible without hover.
 func d1Checkbox(c *ui.Context, p *d1Palette, on, reveal, mixed bool) ui.Element {
-	e := ui.CheckboxBase(c, &on).Size(style.SizeCheckbox, style.SizeCheckbox).JustifySelf(ui.Start).Radius(4).Center()
+	e := ui.CheckboxBase(c, &on).Size(style.SizeCheckbox, style.SizeCheckbox).JustifySelf(ui.Start).Radius(4).Center().Cursor(ui.CursorPointer)
 	if mixed {
 		e.Mixed()
 	}
@@ -1437,7 +1441,7 @@ func d1CheckMark(c *ui.Context, p *d1Palette, on bool) {
 // 悬停/勾选/聚焦时同一位置显示复选框，几何尺寸不变。
 func d1FileSlot(c *ui.Context, p *d1Palette, r d1Row, bitmap *ui.Bitmap, on, reveal, mixed, missing bool) ui.Element {
 	// 复选框不绘制背景与边框，悬停/勾选/聚焦只在原位显示标记。
-	e := ui.CheckboxBase(c, &on).Size(28, 28).Radius(style.RadiusSM).Center()
+	e := ui.CheckboxBase(c, &on).Size(28, 28).Radius(style.RadiusSM).Center().Cursor(ui.CursorPointer)
 	if mixed {
 		e.Mixed()
 	}
@@ -1967,7 +1971,11 @@ func (pg *mainPage) chart(c *ui.Context, p *d1Palette, r d1Row, fill bool) {
 	samples := append([]speedSample(nil), pg.hist[r.id]...)
 	pg.histMu.Unlock()
 	vals := make([]float64, 61)
+	// 窗口锚定到最后一次采样：下载完成后曲线驻留完成时刻，不再随时间滚动。
 	now := time.Now().Unix()
+	if n := len(samples); n > 0 {
+		now = samples[n-1].at.Unix()
+	}
 	for _, sample := range samples {
 		age := now - sample.at.Unix()
 		if age >= 0 && age <= 60 {
@@ -2202,7 +2210,7 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 		pg.limitStatusControl(c, p)
 		ui.Row(c).Shrink(1).MinWidth(0).Gap(2).AlignItems(ui.Center).Children(func() {
 			c.Key("status-directory-choose")
-			choose := ui.ButtonBase(c).Size(24, 24).Shrink(0).Center().Radius(style.RadiusSM).
+			choose := ui.ButtonBase(c).Size(24, 24).Shrink(0).Center().Radius(style.RadiusSM).Cursor(ui.CursorPointer).
 				Label(tr("选择保存文件夹")).Tooltip(tr("选择保存文件夹"))
 			hoverMotion(choose, ui.Transparent, p.hover)
 			choose.Children(func() { style.Icon(c, style.IconFolderOpen, 14, p.mu) })
@@ -2216,7 +2224,7 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 				}
 			})
 			c.Key("status-directory-open")
-			pathButton := ui.ButtonBase(c).Height(24).Shrink(1).MinWidth(0).Padding(0, 4).Radius(style.RadiusSM).
+			pathButton := ui.ButtonBase(c).Height(24).Shrink(1).MinWidth(0).Padding(0, 4).Radius(style.RadiusSM).Cursor(ui.CursorPointer).
 				Label(tr("打开下载文件夹")).Tooltip(pg.saveDir)
 			hoverMotion(pathButton, ui.Transparent, p.hover)
 			pathButton.Children(func() {
@@ -2227,7 +2235,7 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 		// 夜间队列开始时间（点击打开计划任务）；关闭时不显示。
 		if pg.nightOn {
 			nightText := tr("夜间队列 ") + pg.nightAt + tr(" 开始")
-			night := ui.ButtonBase(c).Height(24).Padding(0, 4).Radius(4).Shrink(1).MinWidth(0).Label(tr("打开计划任务"))
+			night := ui.ButtonBase(c).Height(24).Padding(0, 4).Radius(4).Shrink(1).MinWidth(0).Label(tr("打开计划任务")).Cursor(ui.CursorPointer)
 			night.Children(func() {
 				ui.Text(c, tr(nightText)).Shrink(1).MinWidth(0).SingleLine().Tooltip(tr(nightText)).FontSize(style.TextSM).TextColor(p.mu)
 			})
@@ -2302,7 +2310,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 					}
 					ui.Row(c).FillWidth().Margin(6, 0, 0, 0).Justify(ui.End).AlignItems(ui.Center).Children(func() {
 						c.Key("download-source-disclosure")
-						source := ui.ButtonBase(c).Radius(4).Label(tr("编辑来源页")).Expanded(pg.dlgShowPage || pg.dlgExtract)
+						source := ui.ButtonBase(c).Radius(4).Label(tr("编辑来源页")).Cursor(ui.CursorPointer).Expanded(pg.dlgShowPage || pg.dlgExtract)
 						source.Children(func() {
 							label := "来源页可选"
 							if strings.TrimSpace(pg.dlgPage) != "" {
@@ -2360,7 +2368,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 								dirInput := ui.TextInputBase(c, &pg.dlgDir).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg).Label(tr("保存到")).Tooltip(pg.dlgDir)
 								dirFocused = dirInput.Focused()
 								c.Key("download-dir-history")
-								historyBtn := ui.ButtonBase(c).Size(24, 24).Shrink(0).Radius(style.RadiusSM).Center().Role(ui.RoleMenuButton).Label(tr("最近目录")).Tooltip(tr("最近目录")).Expanded(pg.showDirHistory)
+								historyBtn := ui.ButtonBase(c).Size(24, 24).Shrink(0).Radius(style.RadiusSM).Center().Role(ui.RoleMenuButton).Label(tr("最近目录")).Tooltip(tr("最近目录")).Cursor(ui.CursorPointer).Expanded(pg.showDirHistory)
 								hoverMotion(historyBtn, ui.Transparent, p.hover)
 								historyBtn.Children(func() { d1Icon(c, "chevron-down", 14, p.mu) })
 								historyBtn.OnClick(func() { pg.showDirHistory = !pg.showDirHistory }).OnShortcut(0, ui.KeyDown, func() { pg.showDirHistory = true })
@@ -2381,7 +2389,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 								})
 							})
 							c.Key("download-dir-browse")
-							browse := ui.ButtonBase(c).Height(32).Shrink(0).Padding(0, 8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("选择文件夹")).Tooltip(tr("选择文件夹"))
+							browse := ui.ButtonBase(c).Height(32).Shrink(0).Padding(0, 8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("选择文件夹")).Tooltip(tr("选择文件夹")).Cursor(ui.CursorPointer)
 							hoverMotion(browse, ui.Transparent, p.hover)
 							browse.Children(func() {
 								ui.Text(c, tr("选择文件夹")).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
@@ -2397,7 +2405,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("队列")).FontSize(style.TextSM).TextColor(p.mu)
 						c.Key("download-queue")
 						queue := ui.SelectBase(c, &pg.dlgQueue)
-						queue.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("队列")).Children(func() {
+						queue.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("队列")).Cursor(ui.CursorPointer).Children(func() {
 							d1Icon(c, "layers", 16, p.mu)
 							ui.Text(c, pg.queueLabel()).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
 							d1Icon(c, "chev", 16, p.mu)
@@ -2405,7 +2413,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						queue.Popup(func(menu ui.Element) {
 							d1DropdownPanel(menu, p).Width(queue.Trigger.Bounds().W).Children(func() {
 								for i, choice := range pg.queueChoices() {
-									item := queue.Item(i).FillWidth().Padding(6, 8).Radius(5)
+									item := queue.Item(i).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
 									if item.Highlighted() {
 										item.Background(p.hover)
 									}
@@ -2421,7 +2429,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("媒体下载")).FontSize(style.TextSM).TextColor(p.mu)
 						c.Key("download-media")
 						media := ui.SelectBase(c, &pg.dlgMedia)
-						media.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("媒体下载")).Children(func() {
+						media.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("媒体下载")).Cursor(ui.CursorPointer).Children(func() {
 							d1Icon(c, "film", 16, p.mu)
 							ui.Text(c, mediaChoices()[pg.dlgMedia]).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
 							d1Icon(c, "chev", 16, p.mu)
@@ -2429,7 +2437,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						media.Popup(func(menu ui.Element) {
 							d1DropdownPanel(menu, p).Width(media.Trigger.Bounds().W).Children(func() {
 								for i, label := range mediaChoices() {
-									item := media.Item(i).FillWidth().Padding(6, 8).Radius(5)
+									item := media.Item(i).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
 									if item.Highlighted() {
 										item.Background(p.hover)
 									}
@@ -2447,7 +2455,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("画质上限")).FontSize(style.TextSM).TextColor(p.mu)
 						c.Key("download-quality")
 						quality := ui.SelectBase(c, &pg.dlgQuality)
-						quality.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("画质上限")).Children(func() {
+						quality.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("画质上限")).Cursor(ui.CursorPointer).Children(func() {
 							d1Icon(c, "film", 16, p.mu)
 							ui.Text(c, mediaQualities()[pg.dlgQuality]).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
 							d1Icon(c, "chev", 16, p.mu)
@@ -2455,7 +2463,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						quality.Popup(func(menu ui.Element) {
 							d1DropdownPanel(menu, p).Width(quality.Trigger.Bounds().W).Children(func() {
 								for i, label := range mediaQualities() {
-									item := quality.Item(i).FillWidth().Padding(6, 8).Radius(5)
+									item := quality.Item(i).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
 									if item.Highlighted() {
 										item.Background(p.hover)
 									}
@@ -2481,7 +2489,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 										label = "自动"
 									}
 									c.Key(label)
-									segment := ui.RadioBase(c, &pg.dlgSeg, i).Grow(1).Shrink(1).Basis(0).Padding(4, 0).Radius(5).Center().Label(fmt.Sprintf(tr("%s 个连接"), label))
+									segment := ui.RadioBase(c, &pg.dlgSeg, i).Grow(1).Shrink(1).Basis(0).Padding(4, 0).Radius(5).Center().Label(fmt.Sprintf(tr("%s 个连接"), label)).Cursor(ui.CursorPointer)
 									weight := max(float32(0), 1-float32(math.Abs(float64(position.x-float32(i)))))
 									col := p.mu.Mix(p.onpri, weight)
 									segment.Children(func() { ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(col) })
@@ -2536,7 +2544,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 }
 
 func d1Check(c *ui.Context, p *d1Palette, on *bool, label string) ui.Element {
-	box := ui.CheckboxBase(c, on).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Radius(5).Label(tr(label))
+	box := ui.CheckboxBase(c, on).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Radius(5).Label(tr(label)).Cursor(ui.CursorPointer)
 	box.Children(func() {
 		d1CheckMark(c, p, *on)
 		ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(p.fg)

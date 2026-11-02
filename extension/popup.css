@@ -55,7 +55,7 @@ main { flex: 1; min-height: 0; display: flex; }
 .empty.hidden { display: none; }
 #list:not(:empty) + .empty { display: none; }
 .hint { color: var(--mu2); font-size: 11px; padding-top: 8px; }
-input, select, button { font: inherit; }
+input, textarea, select, button { font: inherit; }
 button { height: 28px; padding: 0 10px; border: 1px solid var(--bd); border-radius: 6px;
   color: var(--fg); background: var(--bg); cursor: pointer; }
 button:hover:not(:disabled) { background: var(--sel); }
@@ -186,9 +186,9 @@ h1 { font-size: 15px; font-weight: 650; }
 .settings-retry.hidden { display: none; }
 .settings-document { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--bg); border: 1px solid var(--bd); border-radius: 10px; }
 .settings-document strong { font-weight: 600; }
-.settings-document input { width: 100%; min-width: 0; height: 34px; padding: 0 10px; color: var(--fg); background: var(--bg); border: 1px solid var(--bd2); border-radius: 6px; }
-.settings-document input:disabled { opacity: .6; }
-.settings-document input[aria-invalid="true"] { border-color: var(--bad); }
+.settings-document textarea { width: 100%; min-width: 0; min-height: 80px; max-height: 180px; padding: 8px 10px; line-height: 1.5; resize: vertical; color: var(--fg); background: var(--bg); border: 1px solid var(--bd2); border-radius: 6px; }
+.settings-document textarea:disabled { opacity: .6; }
+.settings-document textarea[aria-invalid="true"] { border-color: var(--bad); }
 .settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .settings-actions:not(:has(button:not(.hidden))) { display: none; }
 .settings-actions button, .settings-toggles .settings-retry { height: 30px; white-space: nowrap; }

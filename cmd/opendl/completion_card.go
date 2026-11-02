@@ -73,7 +73,7 @@ func (pg *mainPage) showNextCompletionCard() {
 			ui.Box(c).FillWidth().Grow(1)
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 				c.Key("completion-delete")
-				del := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Label(tr("删除"))
+				del := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Center().Label(tr("删除")).Cursor(ui.CursorPointer)
 				hoverMotion(del, ui.Transparent, p.hover)
 				del.Children(func() { d1Icon(c, "trash", 16, p.mu) })
 				pg.completionDeleteMenu(c, p, del, win, item)

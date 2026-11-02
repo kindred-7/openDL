@@ -946,7 +946,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     (async () => {
       if (!(await connect()) || !port) return { connected: false };
       const reply = await sendNative(port, { type: "desktopStatus" }, false, 5000);
-      return { connected: Boolean(reply.ok), theme: reply.ok ? reply.theme : null };
+      return { connected: Boolean(reply.ok), theme: reply.ok ? reply.theme : null, reason: reply.reason || "" };
     })().then(sendResponse, () => sendResponse({ connected: false }));
     return true;
   }

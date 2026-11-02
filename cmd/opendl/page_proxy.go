@@ -95,7 +95,7 @@ func (s *settingsPage) proxyFields(c *ui.Context, p *d1Palette) {
 			})
 			ui.Row(c).Disabled(!proxyPasswordStorageAvailable && !s.proxyRemember).Children(func() {
 				c.Key("settings-proxy-remember")
-				ui.CheckboxBase(c, &s.proxyRemember).Gap(8).Justify(ui.Start).AlignItems(ui.Center).
+				ui.CheckboxBase(c, &s.proxyRemember).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 					Label(tr("加密记住密码")).Children(func() {
 					d1CheckMark(c, p, s.proxyRemember)
 					ui.Text(c, tr("加密记住密码")).FontSize(style.TextBase).TextColor(p.fg)
@@ -103,7 +103,7 @@ func (s *settingsPage) proxyFields(c *ui.Context, p *d1Palette) {
 			})
 			ui.Row(c).Children(func() {
 				c.Key("settings-proxy-integrated")
-				ui.CheckboxBase(c, &s.proxyIntegrated).Gap(8).Justify(ui.Start).AlignItems(ui.Center).
+				ui.CheckboxBase(c, &s.proxyIntegrated).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 					Label(tr("使用系统集成认证")).Children(func() {
 					d1CheckMark(c, p, s.proxyIntegrated)
 					ui.Text(c, tr("使用系统集成认证")).FontSize(style.TextBase).TextColor(p.fg)

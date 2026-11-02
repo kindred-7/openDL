@@ -131,12 +131,18 @@ func (pg *mainPage) updateBadge(c *ui.Context, p *d1Palette) {
 		description += "\n" + pg.updater.message
 	}
 	c.Key("update-badge")
-	button := ui.ButtonBase(c).Height(24).Padding(0, 8).Gap(4).AlignItems(ui.Center).
-		Radius(style.RadiusSM).Background(p.sel).Label(label).Description(description)
-	hoverMotion(button, p.sel, p.hover)
+	// Lucide 图标视框两侧各留约 2.4px 空白，左侧内边距按此收窄，使墨迹到圆角面两侧边距一致。
+	button := ui.ButtonBase(c).Height(24).Padding(0, 8, 0, 6).Gap(4).AlignItems(ui.Center).Cursor(ui.CursorPointer).
+		Radius(style.RadiusSM).Label(label).Description(description)
+	colors := style.NewAccentRules(p.dark, p.accent).Colors
+	amount := button.Animate("primary-hover", motionTarget(button.Hovered() || button.Pressed()), controlMotion)
+	button.Background(p.pri.Mix(colors.PrimaryHover, amount))
+	if button.Pressed() {
+		button.Background(colors.PrimaryPressed)
+	}
 	button.Children(func() {
-		style.Icon(c, style.IconArrowUp, 14, p.pri)
-		ui.Text(c, label).FontSize(style.TextXS).FontWeight(style.WeightMedium).TextColor(p.pri).SingleLine()
+		style.Icon(c, style.IconArrowUp, 14, p.onpri)
+		ui.Text(c, label).FontSize(style.TextXS).FontWeight(style.WeightMedium).TextColor(p.onpri).SingleLine()
 	})
 	anchorInside := button.Hovered() || button.FocusVisible()
 	if anchorInside && !pg.updater.badgeDismissed && !pg.updater.busy {

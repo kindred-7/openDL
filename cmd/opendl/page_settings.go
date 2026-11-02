@@ -1133,7 +1133,7 @@ func (s *settingsPage) settingGroup(c *ui.Context, p *d1Palette, group settingsG
 				ui.Text(c, tr(group.title)).FillWidth().Padding(14, 16).FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg).SingleLine()
 			} else {
 				c.Key("advanced-toggle")
-				button := ui.ButtonBase(c).FillWidth().Padding(14, 16).Gap(8).AlignItems(ui.Center).Justify(ui.Start).Label(tr(group.title)).Expanded(open)
+				button := ui.ButtonBase(c).FillWidth().Padding(14, 16).Gap(8).AlignItems(ui.Center).Justify(ui.Start).Label(tr(group.title)).Cursor(ui.CursorPointer).Expanded(open)
 				rotation := button.Animate("settings-disclosure", 180*motionTarget(open), selectMotion)
 				button.Children(func() {
 					ui.Text(c, tr(group.title)).Grow(1).Shrink(1).Basis(0).MinWidth(0).FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg).SingleLine()
@@ -1415,7 +1415,7 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				for i := range s.finishDays {
 					index := i
 					c.Key("settings-finish-day-" + strconv.Itoa(index))
-					ui.CheckboxBase(c, &s.finishDays[index]).Gap(6).Justify(ui.Start).AlignItems(ui.Center).
+					ui.CheckboxBase(c, &s.finishDays[index]).Gap(6).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 						Label(tr("重复日期 ") + tr(labels[index])).Children(func() {
 						d1CheckMark(c, p, s.finishDays[index])
 						ui.Text(c, tr(labels[index])).FontSize(style.TextSM).TextColor(p.fg)
@@ -1606,7 +1606,7 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 func (s *settingsPage) schedulePicker(c *ui.Context, p *d1Palette) {
 	c.Key("schedule-picker")
 	trigger := ui.ButtonBase(c).Width(settingsControlWidth).Height(style.HeightButton).Shrink(0).Padding(0, 10).Gap(6).
-		Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).AlignItems(ui.Center).
+		Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 		Role(ui.RoleMenuButton).Label(tr("开始时间")).Expanded(s.schedulePickerOpen)
 	hoverMotion(trigger, p.bg, p.hover)
 	trigger.Children(func() {
@@ -1681,7 +1681,7 @@ func (s *settingsPage) accentChoices(c *ui.Context, p *d1Palette) {
 	choice := ui.SelectBase(c, &s.owner.preferences.AccentColor)
 	trigger := choice.Trigger.Width(settingsControlWidth).Height(style.HeightButton).Shrink(0).
 		Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd).
-		Background(p.bg).Label(tr("主题色"))
+		Background(p.bg).Label(tr("主题色")).Cursor(ui.CursorPointer)
 	hoverMotion(trigger, p.bg, p.hover)
 	trigger.Children(func() {
 		ui.Box(c).Size(16, 16).Radius(style.RadiusSM).Background(p.pri).Border(1, p.bd)
@@ -1839,7 +1839,7 @@ func (s *settingsPage) shortcutFields(c *ui.Context, p *d1Palette) {
 					label = tr("请按快捷键…")
 				}
 				handle := &s.shortcutHandles[i]
-				button := ui.ButtonBase(c).Bind(handle).Height(28).MinWidth(112).Padding(0, 8).Radius(style.RadiusSM).Border(1, p.bd2).Center().Label(tr(title) + " " + label)
+				button := ui.ButtonBase(c).Bind(handle).Height(28).MinWidth(112).Padding(0, 8).Radius(style.RadiusSM).Border(1, p.bd2).Center().Label(tr(title) + " " + label).Cursor(ui.CursorPointer)
 				button.Children(func() { ui.Text(c, label).FontSize(style.TextXS).TextColor(p.fg).SingleLine() })
 				button.OnClick(func() { s.shortcutEditing = id; s.shortcutError = ""; handle.Focus(c) })
 				button.HandleInput(func(ev ui.InputEvent) bool {
@@ -1913,7 +1913,7 @@ func settingsError(c *ui.Context, p *d1Palette, message string) {
 
 func settingsSwitch(c *ui.Context, p *d1Palette, label string, value *bool) ui.Element {
 	c.Key(label)
-	toggle := ui.SwitchBase(c, value).Size(style.SizeSwitchW, style.SizeSwitchH).Shrink(0).Radius(8).Label(tr(label))
+	toggle := ui.SwitchBase(c, value).Size(style.SizeSwitchW, style.SizeSwitchH).Shrink(0).Radius(8).Label(tr(label)).Cursor(ui.CursorPointer)
 	left, track, thumb := switchMotion(toggle, p, *value)
 	toggle.Children(func() {
 		ui.Box(c).Size(style.SizeSwitchW, style.SizeSwitchH).Radius(8).Background(track).Children(func() {

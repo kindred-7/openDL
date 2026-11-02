@@ -36,8 +36,8 @@
       </div>
       <div class="settings-document">
         <label for="sniff-formats"><strong>自定义嗅探格式</strong></label>
-        <input id="sniff-formats" type="text" placeholder="例如：mobi, epub, psd" aria-describedby="sniff-formats-hint sniff-formats-status" disabled />
-        <p id="sniff-formats-hint" class="settings-hint">追加格式，用逗号或空格分隔；不影响下载接管。</p>
+        <textarea id="sniff-formats" rows="3" placeholder="例如：mobi, epub, psd" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="sniff-formats-hint sniff-formats-status" disabled></textarea>
+        <p id="sniff-formats-hint" class="settings-hint">追加格式，用逗号、空格或换行分隔；不影响下载接管。</p>
         <p id="sniff-formats-status" class="settings-status" role="status" aria-live="polite"></p>
         <div class="settings-actions">
           <button id="sniff-formats-save" class="settings-save" type="button" disabled>保存嗅探格式</button>
@@ -46,7 +46,8 @@
       </div>
       <div class="settings-document">
         <label for="inline-formats"><strong>在线文档格式</strong></label>
-        <input id="inline-formats" type="text" aria-describedby="inline-formats-status" disabled />
+        <textarea id="inline-formats" rows="3" spellcheck="false" autocapitalize="off" autocomplete="off" aria-describedby="inline-formats-hint inline-formats-status" disabled></textarea>
+        <p id="inline-formats-hint" class="settings-hint">用逗号、空格或换行分隔。</p>
         <p id="inline-formats-status" class="settings-status" role="status" aria-live="polite"></p>
         <div class="settings-actions">
           <button id="inline-formats-retry" class="settings-retry hidden" type="button">重试读取文档设置</button>

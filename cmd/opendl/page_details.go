@@ -96,14 +96,14 @@ func (pg *mainPage) detailPositionControl(c *ui.Context, p *d1Palette) {
 	}
 	// 左段切换到另一停靠位置，右段固定为收起面板（最右侧始终是收起）。
 	ui.Row(c).Padding(2).Gap(2).Radius(6).Border(1, p.bd).Background(p.card).Children(func() {
-		other := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(5).Center().
+		other := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(5).Center().Cursor(ui.CursorPointer).
 			Role(ui.RoleToggleButton).Label(tr(targetTip))
 		hoverMotion(other, ui.Transparent, p.hover)
 		other.Children(func() { d1Icon(c, targetIcon, 16, p.mu) })
 		other.OnClick(func() { pg.setDetailPlacement(target) })
 		d1TooltipBelow(c, p, other, targetTip)
 
-		current := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(5).Center().
+		current := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(5).Center().Cursor(ui.CursorPointer).
 			Role(ui.RoleToggleButton).Checked(true).Label(tr(closeTip))
 		current.Background(p.bg).Border(1, p.bd)
 		hoverMotion(current, p.bg, p.hover)
@@ -147,7 +147,7 @@ func (pg *mainPage) detailPanel(c *ui.Context, p *d1Palette) {
 				for i, label := range d1TabLabels {
 					c.Key(label)
 					on := pg.tab == i
-					tab := tabs.Tab(i).Padding(9, 12)
+					tab := tabs.Tab(i).Padding(9, 12).Cursor(ui.CursorPointer)
 					if right {
 						tab.Grow(1).Shrink(1).Basis(0).MinWidth(0).Padding(6, 2).Radius(style.RadiusSM).Center().Clip()
 					}

@@ -121,7 +121,7 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 	case "desktopStatus":
 		info, err := desktopCapabilities(client, token, nil)
 		if err != nil {
-			return map[string]any{"ok": false}
+			return map[string]any{"ok": false, "reason": err.Error()}
 		}
 		return map[string]any{"ok": true, "theme": info.Theme}
 	case "siteRules":

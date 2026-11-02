@@ -78,7 +78,7 @@ func d1SelectionAction(c *ui.Context, p *d1Palette, label, icon string, color ui
 
 func d1SelectionActionBase(c *ui.Context, p *d1Palette, label, icon string, color ui.Color, enabled, tooltip bool) ui.Element {
 	c.Key(label)
-	e := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).
+	e := ui.ButtonBase(c).Size(style.SizeIconButton, style.SizeIconButton).Radius(style.RadiusSM).Cursor(ui.CursorPointer).
 		Center().Label(tr(label)).Disabled(!enabled)
 	if tooltip {
 		e.Tooltip(tr(label))

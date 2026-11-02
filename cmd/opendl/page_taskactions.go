@@ -78,7 +78,7 @@ func (pg *mainPage) pauseAllTasks() {
 func (pg *mainPage) menuGroup(c *ui.Context, p *d1Palette, id, label, icon string, body func()) {
 	open := pg.appMenuSection == id
 	c.Key("menu-group:" + id)
-	button := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(5).Justify(ui.Start).AlignItems(ui.Center).
+	button := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(5).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 		Role(ui.RoleMenuItem).Label(tr(label)).Expanded(open)
 	if button.Hovered() || button.FocusVisible() {
 		button.Background(p.hover)
@@ -171,7 +171,7 @@ func (pg *mainPage) openAboutLink(address string) {
 
 func d1AboutLink(c *ui.Context, p *d1Palette, label string) ui.Element {
 	c.Key("about-link:" + label)
-	button := ui.ButtonBase(c).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(style.HeightButton).Padding(0, 4).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label))
+	button := ui.ButtonBase(c).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(style.HeightButton).Padding(0, 4).Radius(style.RadiusSM).Center().Label(tr(label)).Tooltip(tr(label)).Cursor(ui.CursorPointer)
 	hoverMotion(button, ui.Transparent, p.hover)
 	button.Children(func() {
 		ui.Text(c, tr(label)).Shrink(1).MinWidth(0).FontSize(style.TextBase).TextColor(p.pri).SingleLine()

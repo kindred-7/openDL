@@ -906,6 +906,19 @@ func main() {
 	apiErr := srv.StartWithNewToken()
 	if apiErr != nil {
 		log.Printf("api server: %v", apiErr)
+		// A transient port or token-file failure should not require restarting
+		// the desktop app. StartWithNewToken reserves the port before writing
+		// the token, so retries cannot invalidate another running instance.
+		go func() {
+			ticker := time.NewTicker(5 * time.Second)
+			defer ticker.Stop()
+			for range ticker.C {
+				if err := srv.StartWithNewToken(); err == nil {
+					log.Printf("api server: browser integration restored")
+					return
+				}
+			}
+		}()
 	}
 	if err := nativehost.Register(); err != nil {
 		log.Printf("browser integration: %v", err)

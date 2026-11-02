@@ -51,7 +51,7 @@ func d1Choice(c *ui.Context, p *d1Palette, label string, value *string, options 
 		maxWidth = 140
 	}
 	choice.Trigger.MaxWidth(maxWidth).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(style.RadiusSM).Justify(ui.Start).
-		Border(1, p.bd).Label(tr(label))
+		Border(1, p.bd).Label(tr(label)).Cursor(ui.CursorPointer)
 	hoverMotion(choice.Trigger, p.bg, p.hover)
 	arrow := choice.Trigger.Animate("choice-arrow", 180*motionTarget(choice.Open()), selectMotion)
 	choice.Trigger.Children(func() {
@@ -95,7 +95,7 @@ func d1MenuRow(c *ui.Context, p *d1Palette, label string, enabled bool, keys ...
 		key = keys[0]
 	}
 	c.Key(key)
-	item := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(5).
+	item := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(5).Cursor(ui.CursorPointer).
 		Role(ui.RoleMenuItem).Label(tr(label)).Disabled(!enabled).Justify(ui.Start)
 	hoverMotion(item, ui.Transparent, p.hover)
 	return item
@@ -135,7 +135,7 @@ func d1MultiChoice(c *ui.Context, p *d1Palette, label, icon string, open *bool, 
 		maxWidth = 140
 	}
 	trigger := ui.ButtonBase(c).MaxWidth(maxWidth).Height(style.HeightButton).Padding(0, 10).Gap(6).
-		Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).Role(ui.RoleMenuButton).Label(tr(label)).
+		Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).Role(ui.RoleMenuButton).Label(tr(label)).Cursor(ui.CursorPointer).
 		Expanded(*open).Justify(ui.Start)
 	hoverMotion(trigger, p.bg, p.hover)
 	arrow := trigger.Animate("choice-arrow", 180*motionTarget(*open), selectMotion)
@@ -180,7 +180,7 @@ func d1MultiChoice(c *ui.Context, p *d1Palette, label, icon string, open *bool, 
 
 func d1Switch(c *ui.Context, p *d1Palette, label, icon string, on *bool) ui.Element {
 	c.Key(label)
-	toggle := ui.SwitchBase(c, on).FillWidth().Gap(8).AlignItems(ui.Center).Radius(6).Label(tr(label))
+	toggle := ui.SwitchBase(c, on).FillWidth().Gap(8).AlignItems(ui.Center).Radius(6).Label(tr(label)).Cursor(ui.CursorPointer)
 	left, track, thumb := switchMotion(toggle, p, *on)
 	toggle.Children(func() {
 		if icon != "" {
@@ -214,7 +214,7 @@ func d1Input(c *ui.Context, p *d1Palette, label, key string, value *string, pass
 func d1PrimaryButton(c *ui.Context, p *d1Palette, label, icon string, enabled ...bool) ui.Element {
 	c.Key(label)
 	ok := len(enabled) == 0 || enabled[0]
-	b := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(style.RadiusSM).Border(1, p.pri).Label(tr(label)).Disabled(!ok)
+	b := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(style.RadiusSM).Border(1, p.pri).Label(tr(label)).Cursor(ui.CursorPointer).Disabled(!ok)
 	colors := style.NewAccentRules(p.dark, p.accent).Colors
 	icoCol, textCol := p.onpri, p.onpri
 	if !ok {
@@ -238,7 +238,7 @@ func d1PrimaryButton(c *ui.Context, p *d1Palette, label, icon string, enabled ..
 
 func d1Radio(c *ui.Context, p *d1Palette, value *int, option int, label string) {
 	c.Key(label)
-	b := ui.RadioBase(c, value, option).Height(28).Padding(0, 10).Radius(6).Border(1, p.bd).Label(tr(label))
+	b := ui.RadioBase(c, value, option).Height(28).Padding(0, 10).Radius(6).Border(1, p.bd).Label(tr(label)).Cursor(ui.CursorPointer)
 	if *value == option {
 		b.Background(p.sel)
 	} else if b.Hovered() {
