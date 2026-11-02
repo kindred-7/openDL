@@ -6,9 +6,19 @@ on:
       - '[0-9]+.[0-9]+.[0-9]+'
       - 'v[0-9]+.[0-9]+.[0-9]+'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Exact version tag; required when recovering an existing release'
+        required: false
+        type: string
+      recovery_run_id:
+        description: 'Original Actions run ID containing OpenDL-release-<version>; reuse it without rebuilding'
+        required: false
+        type: string
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: gitcode-auto-release
@@ -20,6 +30,7 @@ jobs:
     outputs:
       tag: ${{ steps.select.outputs.tag }}
       version: ${{ steps.select.outputs.version }}
+      signed-files: ${{ steps.signed-files.outcome }}
     timeout-minutes: 45
     defaults:
       run:
@@ -27,6 +38,10 @@ jobs:
     steps:
       - name: Select an unpublished stable tag
         id: select
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
           $refs = & git ls-remote --tags --refs https://gitcode.com/kindred-wu/openDL.git
@@ -39,31 +54,83 @@ jobs:
           } | Sort-Object Version -Descending)
           if ($tags.Count -eq 0) { throw 'No stable GitCode version tag found.' }
           if ($tags.Count -gt 1 -and $tags[0].Version -eq $tags[1].Version) { throw 'Multiple tags represent the same newest version.' }
-          $tag = $tags[0].Tag
+          if ($env:RECOVERY_RUN_ID -and ($env:RECOVERY_RUN_ID -notmatch '^[1-9][0-9]*$' -or -not $env:REQUESTED_TAG)) { throw 'Recovery requires an exact tag and a numeric original run ID.' }
+          $tag = if ($env:GITHUB_EVENT_NAME -eq 'push') { $env:GITHUB_REF_NAME } elseif ($env:REQUESTED_TAG) { $env:REQUESTED_TAG } else { $tags[0].Tag }
+          $selected = @($tags | Where-Object { $_.Tag -ceq $tag })
+          if ($selected.Count -ne 1) { throw 'The selected stable tag was not found on GitCode.' }
+          $version = [string]$selected[0].Version
           "tag=$tag" >> $env:GITHUB_OUTPUT
-          "version=$($tags[0].Version)" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+          if ($env:RECOVERY_RUN_ID) {
+            "publish=true" >> $env:GITHUB_OUTPUT
+            Write-Host "Recovering $tag from saved signed files in run $env:RECOVERY_RUN_ID; building and signing are disabled."
+            exit 0
+          }
           $encoded = [Uri]::EscapeDataString($tag)
           $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
-          try {
-            $release = Invoke-RestMethod -Uri "$api/tags/$encoded"
-            $names = @($release.assets | ForEach-Object { $_.name })
-            $candidates = @("OpenDL Setup $($tags[0].Version) amd64.exe", "OpenDL.Setup.$($tags[0].Version).amd64.exe")
-            $complete = $names -contains 'releases.json' -and @($candidates | Where-Object { $names -ccontains $_ }).Count -gt 0 -and $release.release_status -ne 'pre' -and $release.prerelease -ne $true
-            if ($complete) {
-              Write-Host "Release $tag already exists; nothing to do."
-              "publish=false" >> $env:GITHUB_OUTPUT
-            } else {
-              # GitCode 会为推送的标签自动生成只有源码包的预发布：交给发布步骤补全资产。
-              Write-Host "Release $tag needs publication."
-              "publish=true" >> $env:GITHUB_OUTPUT
+          if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
+          $query = 'access_token=' + [Uri]::EscapeDataString($env:GITCODE_TOKEN)
+          $release = $null
+          $missing = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            try {
+              $release = Invoke-RestMethod -Uri "${api}/tags/${encoded}?$query" -TimeoutSec 60
+              break
+            } catch {
+              $status = [int]$_.Exception.Response.StatusCode
+              if ($status -eq 404) { $missing = $true; break }
+              if ($status -in @(401, 403) -or $attempt -eq 3) { throw "Cannot inspect GitCode release (HTTP $status). No build was started. Retry later or use the original run ID for recovery." }
+              Write-Warning "GitCode release inspection failed (HTTP $status), attempt $attempt/3."
+              Start-Sleep -Seconds (10 * $attempt)
             }
-          } catch {
-            if ($_.Exception.Response.StatusCode.value__ -ne 404) { throw }
-            $latest = Invoke-RestMethod -Uri "$api/latest"
-            $latestTag = [string]$latest.tag_name
-            if ($latestTag -notmatch '^v?(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$') { throw 'Latest GitCode release has an invalid version.' }
-            if ($tags[0].Version -le [version]$latestTag.TrimStart('v')) { throw 'The tag is not newer than the latest published release.' }
+          }
+          if ($missing) {
             "publish=true" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          if (-not $release) { throw 'GitCode returned no release metadata.' }
+          $names = @($release.assets | ForEach-Object { $_.name })
+          $candidates = @("OpenDL Setup $version amd64.exe", "OpenDL.Setup.$version.amd64.exe")
+          $complete = $names -ccontains 'releases.json' -and @($candidates | Where-Object { $names -ccontains $_ }).Count -gt 0 -and $release.release_status -ne 'pre' -and $release.prerelease -ne $true
+          if ($complete) {
+            Write-Host "Release $tag already exists; synchronize GitHub without rebuilding."
+            "publish=false" >> $env:GITHUB_OUTPUT
+          } else {
+            # Existing binary assets must be completed using their original build.
+            if (@($names | Where-Object { $_ -ceq 'releases.json' -or $candidates -ccontains $_ }).Count -gt 0) {
+              "partial=true" >> $env:GITHUB_OUTPUT
+              Write-Host 'Partial assets exist; the original signed build must be recovered.'
+            }
+            Write-Host "Release $tag needs publication."
+            "publish=true" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Find original signed build before building again
+        id: original-files
+        if: steps.select.outputs.publish == 'true'
+        env:
+          RECOVERY_RUN_ID: ${{ inputs.recovery_run_id }}
+          RELEASE_VERSION: ${{ steps.select.outputs.version }}
+          PARTIAL_RELEASE: ${{ steps.select.outputs.partial }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RECOVERY_RUN_ID) {
+            "run-id=$env:RECOVERY_RUN_ID" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $name = [Uri]::EscapeDataString("OpenDL-release-$env:RELEASE_VERSION")
+          try { $result = Invoke-RestMethod -Headers $headers -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/actions/artifacts?name=$name&per_page=100" -TimeoutSec 60 }
+          catch { throw 'Cannot inspect saved artifacts. Building was stopped to avoid creating different bytes for the same version.' }
+          $saved = @($result.artifacts | Where-Object { -not $_.expired -and $_.name -ceq "OpenDL-release-$env:RELEASE_VERSION" } | Sort-Object created_at -Descending)
+          if ($saved.Count -gt 0) {
+            $run = [string]$saved[0].workflow_run.id
+            if ($run -notmatch '^[1-9][0-9]*$') { throw 'Saved artifact has no valid original run ID.' }
+            "run-id=$run" >> $env:GITHUB_OUTPUT
+            Write-Host "Reusing signed build from run $run; no installer build or signing will run."
+          } elseif ($env:PARTIAL_RELEASE -eq 'true') {
+            throw 'Partial release assets exist but the original saved build has expired. Restore the original signed files; do not rebuild this version.'
           }
 
       - name: Fetch and check GitCode source
@@ -105,7 +172,7 @@ jobs:
           cache: false
 
       - name: Build installer
-        if: steps.select.outputs.publish == 'true'
+        if: steps.select.outputs.publish == 'true' && steps.original-files.outputs.run-id == ''
         working-directory: source
         env:
           RELEASE_VERSION: ${{ steps.select.outputs.version }}
@@ -122,7 +189,7 @@ jobs:
           "INSTALLER_NAME=$($found[0])" >> $env:GITHUB_ENV
 
       - name: Sign release manifest
-        if: steps.select.outputs.publish == 'true'
+        if: steps.select.outputs.publish == 'true' && steps.original-files.outputs.run-id == ''
         working-directory: source
         env:
           RELEASE_TAG: ${{ steps.select.outputs.tag }}
@@ -137,7 +204,44 @@ jobs:
             ./scripts/prepare-gitcode-update.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -NotesFile (Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md") -PrivateKey $key -Tag $env:RELEASE_TAG
           } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
 
+      - name: Recover original signed release files
+        if: steps.select.outputs.publish == 'true' && steps.original-files.outputs.run-id != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenDL-release-${{ steps.select.outputs.version }}
+          path: source/build/windows-amd64
+          run-id: ${{ steps.original-files.outputs.run-id }}
+          github-token: ${{ github.token }}
+
+      - name: Check recovered signed files against selected tag
+        if: steps.select.outputs.publish == 'true' && steps.original-files.outputs.run-id != ''
+        working-directory: source
+        env:
+          RELEASE_TAG: ${{ steps.select.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.select.outputs.version }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @("OpenDL Setup $env:RELEASE_VERSION amd64.exe", "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe")
+          $found = @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path 'build/windows-amd64' $_) })
+          if ($found.Count -ne 1) { throw 'The original artifact must contain exactly one recognized installer.' }
+          $match = [regex]::Match([IO.File]::ReadAllText('cmd/opendl/page_update.go'), '(?m)^var officialUpdatePublicKey = "([^"]+)"')
+          if (-not $match.Success) { throw 'Cannot determine the update public key.' }
+          $key = Join-Path $env:RUNNER_TEMP ('opendl-public-' + [guid]::NewGuid().ToString('N'))
+          try {
+            [IO.File]::WriteAllText($key, $match.Groups[1].Value, [Text.UTF8Encoding]::new($false))
+            $installer = Join-Path 'build/windows-amd64' $found[0]
+            & go run ./cmd/release-sign -verify build/windows-amd64/releases.json -public $key -asset "windows/amd64/installer=$installer"
+            if ($LASTEXITCODE -ne 0) { throw 'Recovered assets failed signature or checksum verification.' }
+          } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
+          $envelope = Get-Content build/windows-amd64/releases.json -Raw | ConvertFrom-Json
+          $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+          $expectedURL = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases/' + [Uri]::EscapeDataString($env:RELEASE_TAG) + '/attach_files/' + [Uri]::EscapeDataString($found[0]) + '/download'
+          $notes = [IO.File]::ReadAllText((Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md"))
+          if ($manifest.version -cne $env:RELEASE_VERSION -or @($manifest.assets).Count -ne 1 -or $manifest.assets[0].url -cne $expectedURL -or $manifest.notes.Trim() -cne $notes.Trim()) { throw 'Recovered manifest does not match the selected tag and release notes.' }
+          "INSTALLER_NAME=$($found[0])" >> $env:GITHUB_ENV
+
       - name: Save signed release files
+        id: signed-files
         if: steps.select.outputs.publish == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -146,10 +250,49 @@ jobs:
             source/build/windows-amd64/${{ env.INSTALLER_NAME }}
             source/build/windows-amd64/releases.json
           if-no-files-found: error
-          retention-days: 7
+          overwrite: true
+          retention-days: 30
+
+  publish-gitcode:
+    needs: release
+    if: needs.release.outputs.signed-files == 'success'
+    # Optional label for a Windows runner with a reliable route to GitCode OBS.
+    runs-on: ${{ vars.GITCODE_PUBLISH_RUNNER || 'windows-latest' }}
+    timeout-minutes: 60
+    env:
+      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Fetch tagged publisher source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone https://gitcode.com/kindred-wu/openDL.git source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to clone GitCode source.' }
+          Set-Location source
+          git checkout --detach "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to check out the release tag.' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'The release tag is not on GitCode main.' }
+          $version = [string](Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          if ($version -cne $env:RELEASE_VERSION) { throw 'The tag and source versions differ.' }
+
+      - name: Download saved signed files
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenDL-release-${{ needs.release.outputs.version }}
+          path: source/build/windows-amd64
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: source/go.mod
+          cache: false
 
       - name: Load publisher for manual recovery
-        if: github.event_name == 'workflow_dispatch' && steps.select.outputs.publish == 'true'
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/checkout@v4
         with:
           ref: ${{ github.sha }}
@@ -157,33 +300,25 @@ jobs:
           persist-credentials: false
 
       - name: Use current publisher for manual recovery
-        if: github.event_name == 'workflow_dispatch' && steps.select.outputs.publish == 'true'
+        if: github.event_name == 'workflow_dispatch'
         run: |
           Copy-Item -LiteralPath 'release-control/scripts/publish-gitcode-release.ps1' -Destination 'source/scripts/publish-gitcode-release.ps1' -Force
 
       - name: Publish on GitCode
-        if: steps.select.outputs.publish == 'true'
         working-directory: source
         env:
-          RELEASE_TAG: ${{ steps.select.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.select.outputs.version }}
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
-          # GitCode 会为推送的标签自动生成只有源码包的预发布，而发布脚本不替换已有
-          # 发布；先删掉不完整的那个，让脚本重新建立并上传资产。
-          $token = [Uri]::EscapeDataString($env:GITCODE_TOKEN)
-          $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases/' + [Uri]::EscapeDataString($env:RELEASE_TAG)
-          try {
-            $existing = Invoke-RestMethod -Uri "$api?access_token=$token"
-            $names = @($existing.assets | ForEach-Object { $_.name })
-            if ($names -cnotcontains 'releases.json') {
-              Invoke-RestMethod -Method Delete -Uri "$api?access_token=$token" | Out-Null
-              Write-Host 'Removed the incomplete auto-generated prerelease.'
-            }
-          } catch { Write-Host 'No incomplete prerelease to remove.' }
-          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $env:INSTALLER_NAME) -Manifest 'build/windows-amd64/releases.json' -NotesFile (Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md") -Tag $env:RELEASE_TAG
+          $candidates = @("OpenDL Setup $env:RELEASE_VERSION amd64.exe", "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe")
+          $found = @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path 'build/windows-amd64' $_) })
+          if ($found.Count -ne 1) { throw 'Saved files must include exactly one recognized installer.' }
+          $envelope = Get-Content 'build/windows-amd64/releases.json' -Raw | ConvertFrom-Json
+          $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+          $notes = Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md"
+          [IO.File]::WriteAllText($notes, [string]$manifest.notes, [Text.UTF8Encoding]::new($false))
+          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $found[0]) -Manifest 'build/windows-amd64/releases.json' -NotesFile $notes -Tag $env:RELEASE_TAG
 
   sync-github:
     needs: release
@@ -191,6 +326,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write
+      actions: read
     env:
       RELEASE_TAG: ${{ needs.release.outputs.tag }}
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
@@ -199,21 +335,10 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - name: Fetch the published GitCode release and source
+      - name: Fetch tagged source
         run: |
           $ErrorActionPreference = 'Stop'
           if ($env:RELEASE_VERSION -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or ($env:RELEASE_TAG -cne $env:RELEASE_VERSION -and $env:RELEASE_TAG -cne "v$env:RELEASE_VERSION")) { throw 'Invalid release tag.' }
-          $tag = [Uri]::EscapeDataString($env:RELEASE_TAG)
-          $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
-          $release = Invoke-RestMethod -Uri "$api/tags/$tag"
-          $names = @($release.assets | ForEach-Object { $_.name })
-          # Prefer the historical asset when both names exist, matching the
-          # previous workflow's behavior for already-published releases.
-          $candidates = @("OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe", "OpenDL Setup $env:RELEASE_VERSION amd64.exe")
-          $found = @($candidates | Where-Object { $names -ccontains $_ })
-          if ($release.release_status -eq 'pre' -or $release.prerelease -eq $true -or $found.Count -eq 0 -or $names -cnotcontains 'releases.json') { throw 'GitCode release is missing a recognized installer or releases.json.' }
-          $installer = $found[0]
-          "INSTALLER_NAME=$installer" >> $env:GITHUB_ENV
           git clone https://gitcode.com/kindred-wu/openDL.git source
           if ($LASTEXITCODE -ne 0) { throw 'Failed to clone GitCode source.' }
           Set-Location source
@@ -223,12 +348,42 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Release tag is not on GitCode main.' }
           $version = [string](Get-Content mygo.json -Raw | ConvertFrom-Json).version
           if ($version -cne $env:RELEASE_VERSION) { throw 'Release tag and source version differ.' }
+
+      - name: Download saved signed files
+        if: needs.release.outputs.signed-files == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenDL-release-${{ needs.release.outputs.version }}
+          path: source/release-assets
+
+      - name: Download previously published files when no build was needed
+        if: needs.release.outputs.signed-files != 'success'
+        working-directory: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = [Uri]::EscapeDataString($env:RELEASE_TAG)
+          $api = 'https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases'
+          $release = Invoke-RestMethod -Uri "$api/tags/$tag"
+          $names = @($release.assets | ForEach-Object { $_.name })
+          $candidates = @("OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe", "OpenDL Setup $env:RELEASE_VERSION amd64.exe")
+          $found = @($candidates | Where-Object { $names -ccontains $_ })
+          if ($release.release_status -eq 'pre' -or $release.prerelease -eq $true -or $found.Count -eq 0 -or $names -cnotcontains 'releases.json') { throw 'GitCode release is missing a recognized installer or releases.json.' }
+          $installer = $found[0]
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
           foreach ($name in @($installer, 'releases.json')) {
             $nameEncoded = [Uri]::EscapeDataString($name)
             try { Invoke-WebRequest -Uri "$api/$tag/attach_files/$nameEncoded/download" -OutFile (Join-Path 'release-assets' $name) }
             catch { throw "Failed to download GitCode asset: $name" }
           }
+
+      - name: Select saved installer
+        working-directory: source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @("OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe", "OpenDL Setup $env:RELEASE_VERSION amd64.exe")
+          $found = @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path 'release-assets' $_) })
+          if ($found.Count -ne 1) { throw 'Saved files must include exactly one recognized installer.' }
+          "INSTALLER_NAME=$($found[0])" >> $env:GITHUB_ENV
 
       - name: Install Go
         uses: actions/setup-go@v5
@@ -247,7 +402,7 @@ jobs:
             [IO.File]::WriteAllText($key, $match.Groups[1].Value, [Text.UTF8Encoding]::new($false))
             $installer = Join-Path 'release-assets' $env:INSTALLER_NAME
             & go run ./cmd/release-sign -verify release-assets/releases.json -public $key -asset "windows/amd64/installer=$installer"
-            if ($LASTEXITCODE -ne 0) { throw 'GitCode assets failed signature or checksum verification.' }
+            if ($LASTEXITCODE -ne 0) { throw 'Release assets failed signature or checksum verification.' }
           } finally { Remove-Item -LiteralPath $key -Force -ErrorAction SilentlyContinue }
           $envelope = Get-Content release-assets/releases.json -Raw | ConvertFrom-Json
           $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
