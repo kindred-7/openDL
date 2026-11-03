@@ -70,8 +70,12 @@ try {
             while (-not $process.WaitForExit(5000)) {
                 $row=''
                 if (Test-Path -LiteralPath $progress) {
-                    $rows=[IO.File]::ReadAllText($progress) -split '[\r\n]+'
-                    $row=@($rows | Where-Object { $_ -match '^\s*[0-9]+\s' -and $_ -notmatch '[^0-9a-zA-Z% .:/+\-]' } | Select-Object -Last 1) -join ''
+                    try {
+                        $logStream=[IO.FileStream]::new($progress,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+                        $reader=[IO.StreamReader]::new($logStream)
+                        try { $rows=$reader.ReadToEnd() -split '[\r\n]+' } finally { $reader.Dispose() }
+                        $row=@($rows | Where-Object { $_ -match '^\s*[0-9]+\s' -and $_ -notmatch '[^0-9a-zA-Z% .:/+\-]' } | Select-Object -Last 1) -join ''
+                    } catch { $row='progress temporarily unavailable' }
                 }
                 Write-Host ("{0} elapsed={1:N0}s; progress={2}" -f $label,$clock.Elapsed.TotalSeconds,$row.Trim())
                 if ($clock.Elapsed.TotalSeconds -gt $limit+15) { $process.Kill(); $process.WaitForExit(); throw 'Curl exceeded its process watchdog.' }
@@ -89,7 +93,7 @@ try {
         }
     }
 } finally {
-    $results.ToArray() | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "upload-diagnostic-$Mode.json" -Encoding utf8
+    [IO.File]::WriteAllText((Join-Path (Get-Location).Path "upload-diagnostic-$Mode.json"), (ConvertTo-Json -InputObject @($results.ToArray()) -Depth 4), [Text.UTF8Encoding]::new($false))
     Remove-Item -LiteralPath $small -Force -ErrorAction SilentlyContinue
     $query=$null; $upload=$null; $config=$null
 }
