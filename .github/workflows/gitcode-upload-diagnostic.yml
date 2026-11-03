@@ -93,7 +93,9 @@ jobs:
           if ($tag -cne "opendl-upload-diagnostic-$env:GITHUB_RUN_ID") { throw 'Refusing to delete an unrelated tag.' }
           $query='access_token='+[Uri]::EscapeDataString($env:GITCODE_TOKEN)
           $base='https://api.gitcode.com/api/v5/repos/kindred-wu/openDL'
-          foreach ($path in @("releases/$tag", "tags/$tag")) {
+          # GitCode deletes the associated release when its temporary tag is
+          # deleted; DELETE /releases/<tag> is not a supported endpoint.
+          foreach ($path in @("tags/$tag")) {
             try { Invoke-RestMethod -Method Delete -Uri "${base}/${path}?$query" -TimeoutSec 60 | Out-Null }
             catch { if ([int]$_.Exception.Response.StatusCode -ne 404) { throw "Diagnostic cleanup failed (HTTP $([int]$_.Exception.Response.StatusCode))." } }
           }
