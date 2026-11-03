@@ -82,14 +82,18 @@ func planRangeSplit(remaining, minimum, holderRate, helperRate int64, setup, com
 	return int64(keep), true
 }
 
-// Bound automatic HTTP claims by a few seconds of useful work. Natural
-// retirement cannot respond promptly if a slow worker owns tens of MiB, while
-// fast/reused connections still need large claims to amortize request costs.
-func automaticClaimLimit(upper, minimum, rate int64, setup time.Duration) int64 {
+// Keep useful responses alive long enough to amortize request and checkpoint
+// costs. Idle peers can still split a long range when additional work is needed;
+// ordinary target reductions drain naturally rather than cycling healthy bodies.
+func automaticClaimLimit(upper, minimum, rate int64, setup time.Duration, steady ...bool) int64 {
 	if rate <= 0 {
-		return max(minimum, min(upper, int64(1<<20)))
+		return min(upper, max(minimum, int64(4<<20)))
 	}
-	seconds := min(16.0, max(4.0, setup.Seconds()*4))
+	seconds := min(60.0, max(20.0, setup.Seconds()*8))
+	if len(steady) > 0 && steady[0] {
+		// Checkpoint cadence is independent of HTTP/FTP request boundaries.
+		seconds = min(180.0, max(60.0, setup.Seconds()*8))
+	}
 	bytes := math.Min(float64(upper), float64(rate)*seconds)
 	return min(upper, max(minimum, int64(512<<10), int64(bytes)))
 }

@@ -10,6 +10,7 @@ import (
 )
 
 const autoConnectionInterval = 2 * time.Second
+const autoConnectionSampleWindows = 3
 const autoConnectionHold = 30 * time.Second
 const autoConnectionPressureInterval = 10 * time.Second
 const autoConnectionReprobes = 6
@@ -148,6 +149,7 @@ type autoConnectionControl struct {
 	shrinkDisabled bool
 	drops          int
 	windows        int
+	rateSum        float64
 	holdSamples    int
 	failures       int
 	reprobes       int
@@ -169,6 +171,7 @@ func (c *autoConnectionControl) hold(now time.Time, rate float64) {
 	}
 	c.holdUntil = now.Add(c.cooldown)
 	c.drops, c.windows, c.holdSamples = 0, 0, 0
+	c.rateSum = 0
 	c.recovery, c.reducing = false, false
 	if c.reprobes >= autoConnectionReprobes {
 		c.hard = true
@@ -195,6 +198,7 @@ func (c *autoConnectionControl) drained() {
 func (c *autoConnectionControl) startProbe(current, next int32, rate float64, reducing bool) int32 {
 	c.phase, c.reference, c.referenceRate = autoConnectionProbe, current, rate
 	c.reducing, c.windows = reducing, 0
+	c.rateSum = 0
 	return next
 }
 
@@ -202,7 +206,12 @@ func (c *autoConnectionControl) startProbe(current, next int32, rate float64, re
 // global/site limits remain hard, and every new worker needs 4 MiB of work.
 func (c *autoConnectionControl) uncap(current, ceiling, hard int32, rate float64, remaining int64) int32 {
 	if c.phase != autoConnectionProbe || c.reducing || c.hard ||
-		current < ceiling || c.reference < 1 || current <= c.reference || c.referenceRate <= 0 {
+		current < ceiling || c.reference < 1 || current <= c.reference || c.referenceRate <= 0 ||
+		c.windows+1 < autoConnectionSampleWindows {
+		return ceiling
+	}
+	rate = (c.rateSum + max(rate, 0)) / float64(c.windows+1)
+	if rate <= c.referenceRate*1.05 {
 		return ceiling
 	}
 	gain := float64(current)/float64(c.reference) - 1
@@ -216,9 +225,21 @@ func (c *autoConnectionControl) uncap(current, ceiling, hard int32, rate float64
 	return ceiling
 }
 
-// Clean two-second windows drive a single feedback loop. Response readiness,
-// competition, integrity, route changes and tail work are gated by the caller.
+// Compare several clean windows so request transitions and short bursts do not
+// repeatedly change concurrency. Contaminated windows are gated by the caller.
 func (c *autoConnectionControl) observe(now time.Time, current, ceiling int32, rate float64, allowGrowth func(int32) bool) int32 {
+	if c.phase != autoConnectionBackoff {
+		if c.phase == autoConnectionHoldPhase {
+			c.holdSamples++
+		}
+		c.windows++
+		c.rateSum += max(rate, 0)
+		if c.windows < autoConnectionSampleWindows {
+			return current
+		}
+		rate = c.rateSum / float64(c.windows)
+		c.windows, c.rateSum = 0, 0
+	}
 	switch c.phase {
 	case autoConnectionBackoff:
 		if now.Before(c.holdUntil) {
@@ -228,12 +249,8 @@ func (c *autoConnectionControl) observe(now time.Time, current, ceiling int32, r
 		return current
 	case autoConnectionProbe:
 		if c.reducing {
-			c.windows++
 			if rate > c.referenceRate*1.05 {
 				c.hold(now, rate)
-				return current
-			}
-			if c.windows < 2 {
 				return current
 			}
 			previous := c.reference
@@ -261,16 +278,16 @@ func (c *autoConnectionControl) observe(now time.Time, current, ceiling int32, r
 				c.hold(now, rate)
 				return previous
 			}
-			// Normal expansion freezes at the accepted current scale; only
-			// failed +1 probes and collapses roll back immediately.
+			// Extra streams without a sustained benefit are not an accepted
+			// scale. Restore the measured reference and let surplus bodies drain.
+			previous, referenceRate := c.reference, c.referenceRate
 			c.failures, c.cooldown = 0, autoConnectionHold
-			c.hold(now, rate)
-			return current
+			c.hold(now, referenceRate)
+			return previous
 		}
 		c.recovery, c.failures, c.cooldown = false, 0, autoConnectionHold
 		c.phase = autoConnectionBaseline
 	case autoConnectionHoldPhase:
-		c.holdSamples++
 		c.peak = max(rate, c.peak*0.99)
 		if !c.shrinkDisabled && current > 1 && c.peak > 0 && rate < c.peak*0.5 {
 			c.drops++
@@ -282,7 +299,9 @@ func (c *autoConnectionControl) observe(now time.Time, current, ceiling int32, r
 			c.drops = 0
 			return c.startProbe(current, max(1, current/2), rate, true)
 		}
-		if c.hard || now.Before(c.holdUntil) || c.holdSamples < int(c.cooldown/autoConnectionInterval) || c.reprobes >= autoConnectionReprobes || current >= ceiling || !allowGrowth(current+1) {
+		// A timer alone is not evidence that a stable transfer needs another
+		// connection. Reserve recovery probes for sustained throughput loss.
+		if c.hard || rate >= c.peak*0.8 || now.Before(c.holdUntil) || c.holdSamples < int(c.cooldown/autoConnectionInterval) || c.reprobes >= autoConnectionReprobes || current >= ceiling || !allowGrowth(current+1) {
 			return current
 		}
 		c.reprobes++
@@ -319,6 +338,7 @@ func (m *Manager) adaptConnections(ctx context.Context, t *Task, q *chunkQ, targ
 	rangeStartup := cooldownOrigin != "" && target.Load() == 1 &&
 		autoConnectionInitial(softCeiling, total) > 1 && !m.isOriginCooling(cooldownOrigin)
 	change := func(next int32, pressure bool) {
+		q.steady.Store(false)
 		next = max(1, min(next, m.automaticConnectionHardCeiling(t, workers, cooldownOrigin)))
 		q.mu.Lock()
 		if q.refusalCap > 0 {
@@ -337,6 +357,7 @@ func (m *Manager) adaptConnections(ctx context.Context, t *Task, q *chunkQ, targ
 		settling = true
 	}
 	invalidate := func() {
+		q.steady.Store(false)
 		phase := control.phase
 		if phase == autoConnectionDrain {
 			phase = control.afterDrain
@@ -427,9 +448,11 @@ func (m *Manager) adaptConnections(ctx context.Context, t *Task, q *chunkQ, targ
 			if elapsed > 0 && delta > 0 {
 				currentRate = float64(delta) / elapsed
 			}
-			limited := m.automaticConnectionsLimited(t, currentRate) || contention != lastContention
+			limited := m.automaticConnectionsLimited(t, currentRate) || contention != lastContention ||
+				(q.checkpoints != nil && q.checkpoints.backlogged())
 			lastContention = contention
 			if limited {
+				q.steady.Store(false)
 				constrained, settling = true, true
 				continue
 			}
@@ -449,7 +472,6 @@ func (m *Manager) adaptConnections(ctx context.Context, t *Task, q *chunkQ, targ
 				settling = true
 				continue
 			}
-			q.prepareSplit(minSize, current)
 			if rangeStartup && t.rangeSupport.Load() == 2 {
 				rangeStartup = false
 				next := autoConnectionInitial(ceiling, total-bytes)
@@ -478,6 +500,8 @@ func (m *Manager) adaptConnections(ctx context.Context, t *Task, q *chunkQ, targ
 			})
 			if next != current {
 				change(next, false)
+			} else {
+				q.steady.Store(control.phase == autoConnectionHoldPhase)
 			}
 		}
 	}

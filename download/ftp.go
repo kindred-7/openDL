@@ -293,7 +293,11 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 	reader := idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel,
 		selectTimeout: func() time.Duration { return m.automaticBodyTimeout(t, segment) }}
 	// FTP 的 REST 读到文件末尾；只收本区间长度后关闭数据连接。
-	written, err := m.copyWithProgressCancel(t, &offsetWriter{f: out, off: start, segment: segment}, io.LimitReader(reader, size), splitCtx.Done())
+	var writer io.Writer = &offsetWriter{f: out, off: start, segment: segment}
+	if segment != nil && segment.checkpoint != nil {
+		writer = rangeCheckpointWriter{writer: writer, stream: segment.checkpoint}
+	}
+	written, err := m.copyWithProgressCancel(t, writer, io.LimitReader(reader, size), splitCtx.Done())
 	if err == nil && written != size {
 		err = &responseReadError{err: fmt.Errorf(i18n.T("分段数据不完整：%d，预期 %d: %w"), written, size, io.ErrUnexpectedEOF)}
 	}

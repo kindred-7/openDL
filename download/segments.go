@@ -30,8 +30,9 @@ type segmentProgress struct {
 	integrityPending atomic.Bool // an auth-int response must reach EOF intact
 	written          atomic.Int64
 	speed            atomic.Int64
-	lastSample       time.Time // guarded by Task.segmentMu
-	lastBytes        int64     // guarded by Task.segmentMu
+	lastSample       time.Time              // guarded by Task.segmentMu
+	lastBytes        int64                  // guarded by Task.segmentMu
+	checkpoint       *rangeCheckpointStream // owned by the range worker; never shared across attempts
 }
 
 func (t *Task) hasHealthyRange(except *segmentProgress) bool {

@@ -1914,8 +1914,11 @@ type chunkQ struct {
 	mu             sync.Mutex
 	task           *Task
 	chunks         []chunkSpan
-	sequential     bool          // a single worker fills the earliest remaining range first
-	target         *atomic.Int32 // desired workers, assigned before workers start
+	sequential     bool              // a single worker fills the earliest remaining range first
+	automatic      bool              // automatic scheduling favors long, useful responses
+	checkpoints    *rangeCheckpoints // immutable once the task's workers start
+	steady         atomic.Bool       // stable target permits longer uninterrupted claims
+	target         *atomic.Int32     // desired workers, assigned before workers start
 	stopped        bool
 	active         map[*chunkWork]struct{}
 	wake           chan struct{}
@@ -2067,6 +2070,9 @@ func (q *chunkQ) takeLocked(minSize, maxSize, nextOffset int64) (chunkSpan, bool
 // splitLocked publishes at most one non-overlapping tail. q.mu is held;
 // segment.splitMu is acquired before changing the writer's exclusive boundary.
 func (q *chunkQ) splitLocked(minSize int64, worker int) bool {
+	if q.automatic && q.checkpoints != nil && q.checkpoints.backlogged() {
+		return false
+	}
 	helperRate := q.workerRates[worker]
 	var throughput int64
 	for work := range q.active {
@@ -2081,6 +2087,10 @@ func (q *chunkQ) splitLocked(minSize int64, worker int) bool {
 		setup = 250 * time.Millisecond
 	}
 	commit := time.Duration(q.task.rangeCommitNanos.Load())
+	if q.checkpoints != nil {
+		// Journal syncs are batched independently of response boundaries.
+		commit = 0
+	}
 	minimum := minSize
 	if q.target != nil {
 		minimum = max(minSize, automaticSplitMinimum(throughput))
@@ -2111,6 +2121,15 @@ func (q *chunkQ) splitLocked(minSize int64, worker int) bool {
 				continue
 			}
 			speed := segment.speed.Load()
+			if q.automatic {
+				// Splitting a healthy body closes its original response early.
+				// Require seconds of useful work on both sides; micro rescue is
+				// reserved for stalled bodies, not small but progressing tails.
+				if (pass > 0 && (speed > 0 || age < 5*time.Second)) ||
+					(speed > 0 && helperRate > 0 && float64(left) < (float64(speed)+float64(helperRate))*8) {
+					continue
+				}
+			}
 			if done < minimum/2 && (speed > 0 || age < 5*time.Second) {
 				continue
 			}
@@ -2155,15 +2174,6 @@ func (q *chunkQ) splitLocked(minSize int64, worker int) bool {
 		minimum = minSize
 	}
 	return false
-}
-
-func (q *chunkQ) prepareSplit(minSize int64, target int32) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.stopped || target <= 1 || len(q.chunks) > 0 || len(q.active) != int(target) {
-		return
-	}
-	q.splitLocked(minSize, -1)
 }
 
 // claim waits while a peer is working. If no unclaimed data remains, it splits
@@ -2335,7 +2345,7 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 	}
 	t.resetSegments(completed)
 	sort.Slice(completed, func(i, j int) bool { return completed[i].start < completed[j].start })
-	q := &chunkQ{task: t, sequential: conns == 1}
+	q := &chunkQ{task: t, sequential: conns == 1, automatic: automatic}
 	t.rangeRouteEpoch.Store(m.autoConnRouteEpoch.Load())
 	var next int64
 	for _, chunk := range completed {
@@ -2398,6 +2408,13 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 		}
 		errMu.Unlock()
 	}
+	var checkpoints *rangeCheckpoints
+	if automatic && m.storeDir != "" {
+		checkpoints = newRangeCheckpoints(m, t, out, func(err error) {
+			fail(fmt.Errorf(i18n.T("无法保存分段进度：%w"), err))
+		})
+		q.checkpoints = checkpoints
+	}
 	var target atomic.Int32
 	var rollbackEpoch atomic.Uint64
 	target.Store(int32(workers))
@@ -2452,11 +2469,14 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 					// A single-stream baseline must not be forced into the small
 					// chunks calculated for the maximum possible worker count.
 					claimSize = assignedChunkLimit(total, int64(max(target.Load(), 1)), minSize)
-					if cooldownOrigin != "" && total > 2<<20 {
+					if total > 2<<20 {
 						q.mu.Lock()
 						rate := q.workerRates[index]
 						q.mu.Unlock()
-						claimSize = automaticClaimLimit(claimSize, minSize, rate, time.Duration(t.rangeSetupNanos.Load()))
+						// Do not reapply the fixed-mode 64 MiB ceiling to fast
+						// automatic streams: it would force subsecond requests.
+						claimSize = automaticClaimLimit(max(minSize, total-t.done.Load()), minSize, rate,
+							time.Duration(t.rangeSetupNanos.Load()), q.steady.Load())
 					}
 				}
 				work, ok := q.claim(splitCtx, minSize, claimSize, nextOffset, index, autoTarget)
@@ -2468,6 +2488,9 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 				}
 				c := work.span
 				segment := t.startSegment(c)
+				if checkpoints != nil {
+					segment.checkpoint = checkpoints.stream(c.start)
+				}
 				q.activate(work, segment)
 				var written int64
 				var err error
@@ -2549,6 +2572,17 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 						err = nil
 						break
 					}
+					if checkpoints != nil {
+						// Retraction must be durable before this attempt's bytes
+						// can be overwritten or reassigned to another request.
+						if checkpointErr := segment.checkpoint.discard(); checkpointErr != nil {
+							t.removeSegment(segment)
+							fail(fmt.Errorf(i18n.T("无法保存分段进度：%w"), checkpointErr))
+							q.finish(work, nil)
+							return
+						}
+						segment.checkpoint = checkpoints.stream(c.start)
+					}
 					rollbackEpoch.Add(1)
 					t.done.Add(-written) // a retry must not double-count
 					segment.done.Store(0)
@@ -2580,6 +2614,14 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 				}
 				if written == 0 && tail != nil {
 					t.removeSegment(segment)
+					q.finish(work, tail)
+					continue
+				}
+				if checkpoints != nil {
+					segment.checkpoint.finish(c)
+					segment.checkpoint = nil
+					segment.active.Store(false)
+					nextOffset = c.end + 1
 					q.finish(work, tail)
 					continue
 				}
@@ -2620,9 +2662,34 @@ func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, co
 		}(i)
 	}
 	wg.Wait()
+	var checkpointFailure error
+	if checkpoints != nil {
+		// Includes partial prefixes accepted on pause. Publication, fallback
+		// and output close must never race the journal writer.
+		if checkpointErr := checkpoints.close(); checkpointErr != nil {
+			checkpointFailure = fmt.Errorf(i18n.T("无法保存分段进度：%w"), checkpointErr)
+			fail(checkpointFailure)
+		}
+	}
 	stopSplit()
 	if autoDone != nil {
 		<-autoDone
+	}
+	if checkpoints != nil && firstErr != nil {
+		// A failed response may have earlier durable blocks. Reflect those
+		// blocks, rather than either losing them or counting unrecorded bytes.
+		t.checkpointMu.Lock()
+		retained := append([]chunkSpan(nil), t.completed...)
+		var done int64
+		for _, span := range retained {
+			done += span.end - span.start + 1
+		}
+		t.done.Store(done)
+		t.checkpointMu.Unlock()
+		t.resetSegments(retained)
+	}
+	if checkpointFailure != nil {
+		return checkpointFailure
 	}
 	if firstErr != nil {
 		return firstErr
@@ -2829,7 +2896,12 @@ func (m *Manager) downloadRangeResolved(t *Task, out *os.File, start, end, total
 	if splitCtx != nil {
 		canceled = splitCtx.Done()
 	}
-	written, err := m.copyWithProgressCancel(t, &offsetWriter{f: out, off: start, segment: segment}, io.LimitReader(body, size), canceled)
+	var writer io.Writer = &offsetWriter{f: out, off: start, segment: segment}
+	if segment != nil && segment.checkpoint != nil {
+		segment.checkpoint.protected = segment.integrityPending.Load()
+		writer = rangeCheckpointWriter{writer: writer, stream: segment.checkpoint}
+	}
+	written, err := m.copyWithProgressCancel(t, writer, io.LimitReader(body, size), canceled)
 	if err == nil && written != size {
 		err = &responseReadError{err: fmt.Errorf(i18n.T("分段数据不完整：%d，预期 %d: %w"), written, size, io.ErrUnexpectedEOF)}
 	}
