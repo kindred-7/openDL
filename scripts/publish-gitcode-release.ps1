@@ -20,7 +20,7 @@ $fileName = [IO.Path]::GetFileName($installerPath)
 if ($fileName -cne "OpenDL Setup $version amd64.exe" -and $fileName -cne "OpenDL.Setup.$version.amd64.exe") { throw 'The installer filename does not match the version and architecture.' }
 if ([IO.Path]::GetFileName($manifestPath) -cne 'releases.json') { throw 'The manifest must be named releases.json.' }
 
-$source = [IO.File]::ReadAllText((Join-Path $root 'cmd\opendl\page_update.go'))
+$source = [IO.File]::ReadAllText((Join-Path $root 'cmd/opendl/page_update.go'))
 $match = [regex]::Match($source, '(?m)^var officialUpdatePublicKey = "([^"]+)"')
 if (-not $match.Success) { throw 'Cannot determine the application update public key.' }
 $publicKeyFile = Join-Path ([IO.Path]::GetTempPath()) ('opendl-public-' + [Guid]::NewGuid().ToString('N') + '.txt')

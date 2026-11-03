@@ -256,7 +256,7 @@ jobs:
   publish-gitcode:
     needs: release
     if: needs.release.outputs.signed-files == 'success'
-    # Optional label for a Windows runner with a reliable route to GitCode OBS.
+    # Optional label for a runner with PowerShell and a reliable route to GitCode OBS.
     runs-on: ${{ vars.GITCODE_PUBLISH_RUNNER || 'windows-latest' }}
     timeout-minutes: 90
     env:
@@ -266,6 +266,20 @@ jobs:
       run:
         shell: pwsh
     steps:
+      - name: Prepare publisher workspace
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          Set-Location -LiteralPath $workspace
+          foreach ($name in @('source', 'release-control')) {
+            $path = Join-Path $workspace $name
+            if (Test-Path -LiteralPath $path) {
+              $item = Get-Item -LiteralPath $path -Force
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing to clean linked publisher directory: $name" }
+              Remove-Item -LiteralPath $path -Recurse -Force
+            }
+          }
+
       - name: Fetch tagged publisher source
         run: |
           $ErrorActionPreference = 'Stop'

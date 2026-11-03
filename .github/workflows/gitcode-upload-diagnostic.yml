@@ -2,6 +2,12 @@ name: Diagnose GitCode upload
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: 'Compare cloud routes or measure the dedicated NAS upload route'
+        type: choice
+        options: [cloud, nas]
+        default: cloud
 
 permissions:
   contents: read
@@ -39,15 +45,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: windows-latest
-            mode: system
-          - runner: windows-latest
-            mode: git
-          - runner: ubuntu-24.04
-            mode: linux
-          - runner: windows-latest
-            mode: compat
+        include: ${{ fromJSON(inputs.target == 'nas' && '[{"runner":"opendl-gitcode-nas","mode":"linux"}]' || '[{"runner":"windows-latest","mode":"system"},{"runner":"windows-latest","mode":"git"},{"runner":"ubuntu-24.04","mode":"linux"},{"runner":"windows-latest","mode":"compat"}]') }}
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
