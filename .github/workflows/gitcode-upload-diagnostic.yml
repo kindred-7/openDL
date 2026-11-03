@@ -1,0 +1,100 @@
+name: Diagnose GitCode upload
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: gitcode-upload-diagnostic
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+    steps:
+      - name: Create isolated diagnostic prerelease
+        id: prepare
+        shell: pwsh
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+        run: |
+          $ErrorActionPreference='Stop'
+          if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token.' }
+          $tag="opendl-upload-diagnostic-$env:GITHUB_RUN_ID"
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          $query='access_token='+[Uri]::EscapeDataString($env:GITCODE_TOKEN)
+          $body=@{tag_name=$tag;name=$tag;body='Temporary network diagnostics. Not a software release.';release_status='pre';target_commitish=$env:GITHUB_SHA} | ConvertTo-Json -Compress
+          try { Invoke-RestMethod -Method Post -Uri "https://api.gitcode.com/api/v5/repos/kindred-wu/openDL/releases?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 60 | Out-Null }
+          catch { throw "Diagnostic prerelease creation failed (HTTP $([int]$_.Exception.Response.StatusCode))." }
+          Write-Host "Created isolated prerelease: $tag"
+
+  upload:
+    needs: prepare
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            mode: system
+          - runner: windows-latest
+            mode: git
+          - runner: ubuntu-24.04
+            mode: linux
+          - runner: windows-latest
+            mode: compat
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Download existing signed installer without building
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenDL-release-0.1.14
+          run-id: 41681478873
+          github-token: ${{ github.token }}
+          path: release-assets
+      - name: Diagnose small and full-size uploads
+        shell: pwsh
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          DIAGNOSTIC_TAG: ${{ needs.prepare.outputs.tag }}
+          DIAGNOSTIC_MODE: ${{ matrix.mode }}
+        run: |
+          ./scripts/diagnose-gitcode-upload.ps1 -Tag $env:DIAGNOSTIC_TAG -Mode $env:DIAGNOSTIC_MODE -Installer 'release-assets/OpenDL Setup 0.1.14 amd64.exe'
+      - name: Save sanitized transfer metrics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitcode-upload-diagnostic-${{ matrix.mode }}
+          path: upload-diagnostic-${{ matrix.mode }}.json
+          if-no-files-found: warn
+          retention-days: 7
+
+  cleanup:
+    needs: [prepare, upload]
+    if: always() && needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete only this run's temporary prerelease and tag
+        shell: pwsh
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          DIAGNOSTIC_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          $ErrorActionPreference='Stop'
+          $tag=$env:DIAGNOSTIC_TAG
+          if ($tag -cne "opendl-upload-diagnostic-$env:GITHUB_RUN_ID") { throw 'Refusing to delete an unrelated tag.' }
+          $query='access_token='+[Uri]::EscapeDataString($env:GITCODE_TOKEN)
+          $base='https://api.gitcode.com/api/v5/repos/kindred-wu/openDL'
+          foreach ($path in @("releases/$tag", "tags/$tag")) {
+            try { Invoke-RestMethod -Method Delete -Uri "${base}/${path}?$query" -TimeoutSec 60 | Out-Null }
+            catch { if ([int]$_.Exception.Response.StatusCode -ne 404) { throw "Diagnostic cleanup failed (HTTP $([int]$_.Exception.Response.StatusCode))." } }
+          }
+          Write-Host "Removed diagnostic prerelease and tag: $tag"
