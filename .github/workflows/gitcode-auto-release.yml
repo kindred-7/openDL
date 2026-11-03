@@ -258,7 +258,7 @@ jobs:
     if: needs.release.outputs.signed-files == 'success'
     # Optional label for a Windows runner with a reliable route to GitCode OBS.
     runs-on: ${{ vars.GITCODE_PUBLISH_RUNNER || 'windows-latest' }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       RELEASE_TAG: ${{ needs.release.outputs.tag }}
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
@@ -308,6 +308,7 @@ jobs:
         working-directory: source
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          UPLOAD_TIMEOUT_SEC: ${{ vars.GITCODE_UPLOAD_TIMEOUT_SEC || '1800' }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
@@ -318,7 +319,7 @@ jobs:
           $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
           $notes = Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md"
           [IO.File]::WriteAllText($notes, [string]$manifest.notes, [Text.UTF8Encoding]::new($false))
-          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $found[0]) -Manifest 'build/windows-amd64/releases.json' -NotesFile $notes -Tag $env:RELEASE_TAG
+          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $found[0]) -Manifest 'build/windows-amd64/releases.json' -NotesFile $notes -Tag $env:RELEASE_TAG -UploadAttempts 2 -UploadTimeoutSec ([int]$env:UPLOAD_TIMEOUT_SEC)
 
   sync-github:
     needs: release

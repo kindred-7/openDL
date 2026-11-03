@@ -3,8 +3,8 @@ param(
     [Parameter(Mandatory = $true)][string]$Manifest,
     [Parameter(Mandatory = $true)][string]$NotesFile,
     [string]$Tag = '',
-    [ValidateRange(1, 5)][int]$UploadAttempts = 3,
-    [ValidateRange(120, 900)][int]$UploadTimeoutSec = 600
+    [ValidateRange(1, 5)][int]$UploadAttempts = 2,
+    [ValidateRange(120, 2400)][int]$UploadTimeoutSec = 1800
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,11 +89,15 @@ function ConvertTo-CurlConfigValue([string]$Value) {
 function Send-ReleaseFile($Upload, [string]$Path) {
     $uploadUri = $null
     if (-not [Uri]::TryCreate([string]$Upload.url, [UriKind]::Absolute, [ref]$uploadUri) -or $uploadUri.Scheme -cne 'https') { throw 'GitCode returned an invalid upload URL.' }
-    Write-Host "Upload endpoint: $($uploadUri.DnsSafeHost); connect limit: 30s; low-speed limit: 1 KiB/s for 90s; total limit: ${UploadTimeoutSec}s."
+    $size = (Get-Item -LiteralPath $Path).Length
+    $timeout = if ($size -le 1MB) { [math]::Min($UploadTimeoutSec, 120) } else { $UploadTimeoutSec }
+    $progressFile = Join-Path ([IO.Path]::GetTempPath()) ('opendl-upload-' + [guid]::NewGuid().ToString('N') + '.log')
+    Write-Host "Upload endpoint: $($uploadUri.DnsSafeHost); bytes=$size; curl=$($curl.Source); connect limit: 30s; low-speed limit: 1 KiB/s for 90s; total limit: ${timeout}s."
     $config = @(
-        'silent', 'fail', 'globoff', 'proto = "=https"',
-        'connect-timeout = 30', "max-time = $UploadTimeoutSec",
+        'fail', 'globoff', 'proto = "=https"',
+        'connect-timeout = 30', "max-time = $timeout",
         'speed-limit = 1024', 'speed-time = 90',
+        ('stderr = ' + (ConvertTo-CurlConfigValue $progressFile)),
         ('output = ' + (ConvertTo-CurlConfigValue $(if ($env:OS -eq 'Windows_NT') { 'NUL' } else { '/dev/null' }))),
         ('url = ' + (ConvertTo-CurlConfigValue $uploadUri.AbsoluteUri)),
         ('upload-file = ' + (ConvertTo-CurlConfigValue $Path)),
@@ -116,20 +120,48 @@ function Send-ReleaseFile($Upload, [string]$Path) {
     $start.RedirectStandardError = $true
     $process = [Diagnostics.Process]::new()
     $process.StartInfo = $start
+    $started = $false
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     try {
         [void]$process.Start()
+        $started = $true
         $output = $process.StandardOutput.ReadToEndAsync()
         $errors = $process.StandardError.ReadToEndAsync()
         $process.StandardInput.WriteLine(($config -join "`n"))
         $process.StandardInput.Close()
-        $process.WaitForExit()
+        while (-not $process.WaitForExit(15000)) {
+            $row = 'progress temporarily unavailable'
+            try {
+                $stream = [IO.FileStream]::new($progressFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+                $reader = [IO.StreamReader]::new($stream)
+                try { $rows = $reader.ReadToEnd() -split '[\r\n]+' } finally { $reader.Dispose() }
+                # Never print stderr errors or arbitrary text: they may contain
+                # a signed URL. Only curl's numeric transfer-meter row is safe.
+                $safe = @($rows | Where-Object { $_ -match '^\s*[0-9]+\s' -and $_ -notmatch '[^0-9a-zA-Z% .:/+\-]' } | Select-Object -Last 1)
+                if ($safe.Count -gt 0) { $row = $safe[0].Trim() }
+            } catch { }
+            Write-Host ("Upload elapsed={0:N0}s; progress={1}" -f $clock.Elapsed.TotalSeconds, $row)
+            if ($clock.Elapsed.TotalSeconds -gt $timeout + 30) {
+                $process.Kill()
+                $process.WaitForExit()
+                throw 'Upload transport exceeded its process watchdog.'
+            }
+        }
         $stats = $output.GetAwaiter().GetResult().Trim().Split('|')
         # Discard stderr: transport errors can include the signed URL.
         [void]$errors.GetAwaiter().GetResult()
         if ($stats.Count -ne 8 -or ($stats -join '|') -notmatch '^[0-9.|]+$') { throw 'Upload transport returned invalid diagnostics.' }
         Write-Host "Upload result: curl=$($process.ExitCode), HTTP=$($stats[0]), sent=$($stats[1]) bytes, average=$($stats[2]) bytes/s, DNS=$($stats[3])s, TCP=$($stats[4])s, TLS=$($stats[5])s, first response=$($stats[6])s, total=$($stats[7])s."
+        if ($process.ExitCode -eq 28 -and [double]$stats[1] -gt 0 -and [double]$stats[1] -lt $size -and [double]$stats[2] -gt 0) {
+            $estimate = [math]::Ceiling($size / [double]$stats[2])
+            Write-Warning "Data was still uploading when the time budget expired; estimated whole-file duration at the observed average is ${estimate}s. Use a faster upload runner or increase the bounded upload budget."
+        }
         return [pscustomobject]@{ ExitCode = $process.ExitCode; Status = [int]$stats[0] }
-    } finally { $process.Dispose() }
+    } finally {
+        if ($started -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
+        $process.Dispose()
+        Remove-Item -LiteralPath $progressFile -Force -ErrorAction SilentlyContinue
+    }
 }
 function Test-ReleaseFile([string]$Path) {
     $name = [IO.Path]::GetFileName($Path)
