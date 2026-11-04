@@ -40,9 +40,6 @@ const (
 	Canceled State = "canceled"
 )
 
-// defaultUserAgent is used only when a task supplies no client identity.
-const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
-
 // Request is one download order, as the extension sends it.
 type Request struct {
 	URL           string            `json:"url"`
@@ -79,6 +76,7 @@ type Snapshot struct {
 	Total                                int64
 	Done                                 int64
 	Speed                                int64 // bytes per second
+	PeakSpeed                            int64 // highest sampled bytes per second over the task lifetime
 	Err                                  string
 	Created                              time.Time
 	Finished                             time.Time // zero while the task is still going
@@ -171,6 +169,7 @@ type Task struct {
 	outputLimit atomic.Int64 // zero when unknown or no supported filesystem limit
 	transferred atomic.Int64 // bytes read from the network, including retried data
 	speed       atomic.Int64
+	peakSpeed   atomic.Int64
 	state       atomic.Value // State
 	errMu       sync.Mutex
 	err         string
@@ -250,7 +249,7 @@ func (t *Task) newRequest(url string) (*http.Request, context.CancelFunc, error)
 		req.Header.Set(k, v)
 	}
 	if strings.TrimSpace(req.Header.Get("User-Agent")) == "" {
-		req.Header.Set("User-Agent", defaultUserAgent)
+		req.Header.Set("User-Agent", DefaultUserAgent)
 	}
 	if req.Header.Get("Referer") == "" {
 		if referer := sourceReferer(pageURL, req.URL); referer != "" {
@@ -307,7 +306,7 @@ func (t *Task) snapshotBase() Snapshot {
 	return Snapshot{
 		ID: t.id, URL: address, Name: name, FilePath: filePath,
 		State: t.state.Load().(State), Total: t.total.Load(),
-		Done: t.done.Load(), Speed: t.speed.Load(), Err: t.errText(),
+		Done: t.done.Load(), Speed: t.speed.Load(), PeakSpeed: t.peakSpeed.Load(), Err: t.errText(),
 		Created: t.created, Finished: finished, Elapsed: elapsed, BrowserOrigin: t.browserOrigin,
 		Connections: t.conns, EffectiveConnections: int(t.effectiveConnections.Load()), Held: t.held.Load(), PageURL: pageURL, OpenFolder: t.openFolder, Queue: t.queue, Night: t.night.Load(),
 		NightSince: nightSince,
@@ -355,7 +354,8 @@ type Manager struct {
 	tasks                 []*Task
 	dir                   string
 	concurrency           int
-	conns                 int // default connections per task
+	conns                 int    // default connections per task
+	userAgent             string // guarded by mu; empty selects DefaultUserAgent
 	onChange              func()
 	client                *http.Client
 	proxy                 *proxyTransport
@@ -884,6 +884,7 @@ func (m *Manager) AddRecorded(req Request) (string, error) {
 		t.nightSince = t.created
 	}
 	m.mu.Lock()
+	t.headers = downloadHeaders(t.headers, m.userAgent)
 	if t.conns == 0 {
 		t.conns = m.conns
 	}
@@ -940,6 +941,7 @@ func (m *Manager) add(req Request, held bool) string {
 	t.state.Store(Queued)
 	m.mu.Lock()
 	persistImmediately := m.updateStarting
+	t.headers = downloadHeaders(t.headers, m.userAgent)
 	if m.updateStarting && !held {
 		held = true
 		t.held.Store(true)
@@ -1456,7 +1458,7 @@ func (m *Manager) run(t *Task, ticket *queueTicket) {
 	m.notify()
 	speedStop := make(chan struct{})
 	speedDone := make(chan struct{})
-	go m.sampleSpeed(t, speedStop, speedDone)
+	go m.sampleSpeed(t, speedStop, speedDone, time.Now(), t.transferred.Load())
 	var downloadErr error
 	for attempt := 0; attempt < maxRequestAttempts; attempt++ {
 		downloadErr = m.download(t)
@@ -3023,21 +3025,32 @@ func (m *Manager) copyWithProgressCancel(t *Task, w io.Writer, body io.Reader, c
 
 // sampleSpeed combines all connections and counts retransmitted bytes without
 // confusing them with completed file progress. It also reports zero on stalls.
-func (m *Manager) sampleSpeed(t *Task, stop <-chan struct{}, done chan<- struct{}) {
+func (m *Manager) sampleSpeed(t *Task, stop <-chan struct{}, done chan<- struct{}, lastTime time.Time, lastBytes int64) {
 	defer close(done)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	lastTime, lastBytes := time.Now(), t.transferred.Load()
+	sample := func(now time.Time) {
+		bytes := t.transferred.Load()
+		if elapsed := now.Sub(lastTime); elapsed > 0 {
+			rate := max(int64(0), int64(float64(bytes-lastBytes)/elapsed.Seconds()))
+			for peak := t.peakSpeed.Load(); rate > peak; peak = t.peakSpeed.Load() {
+				if t.peakSpeed.CompareAndSwap(peak, rate) {
+					break
+				}
+			}
+			t.speed.Store(rate)
+		}
+		lastTime, lastBytes = now, bytes
+	}
 	for {
 		select {
 		case <-stop:
+			// Retain the final partial interval, including transfers that finish
+			// before the first tick. The caller clears only the current speed.
+			sample(time.Now())
 			return
 		case now := <-ticker.C:
-			bytes := t.transferred.Load()
-			if elapsed := now.Sub(lastTime); elapsed > 0 {
-				t.speed.Store(int64(float64(bytes-lastBytes) / elapsed.Seconds()))
-			}
-			lastTime, lastBytes = now, bytes
+			sample(now)
 			t.sampleSegments(now)
 			m.notify()
 		}

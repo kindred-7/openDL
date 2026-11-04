@@ -425,8 +425,6 @@ func (pg *mainPage) selectTableRow(id string, mods ui.Modifiers) {
 	pg.setChecked(id, true)
 	pg.sel = id
 	pg.selAnchor = id
-	pg.detailPlacement = "right"
-	pg.showDetails()
 }
 
 // selectRowRange 从锚点行到目标行整段选择（含两端，按可见顺序）；
@@ -469,9 +467,6 @@ func (pg *mainPage) toggleTableCheckbox(id string) {
 	pg.selAnchor = id
 	if pg.sel == "" {
 		pg.hideDetails()
-	} else {
-		pg.detailPlacement = "right"
-		pg.showDetails()
 	}
 }
 

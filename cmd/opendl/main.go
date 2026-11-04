@@ -814,6 +814,7 @@ func main() {
 	i18n.Set(preferences.Language)
 	dir := preferences.Directory
 	mgr := download.NewManager(dir, preferences.TaskConcurrency, preferences.Connections)
+	_ = mgr.SetUserAgent(preferences.UserAgent) // Preferences were normalized before initialization.
 	mgr.SetMediaMuxProgram(preferences.MediaMuxProgram)
 	mgr.SetRateLimit(int64(preferences.RateMBps * float64(1<<20)))
 	mgr.SetMaxConnections(preferences.MaxConnections)

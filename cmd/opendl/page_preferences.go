@@ -34,6 +34,7 @@ type appPreferences struct {
 	Shortcuts             map[string]string          `json:"shortcuts,omitempty"`
 	MediaMuxProgram       string                     `json:"media_mux_program,omitempty"`
 	SiteRulesURL          string                     `json:"site_rules_url,omitempty"`
+	UserAgent             string                     `json:"user_agent,omitempty"`
 	WindowsAuth           []download.WindowsAuthSite `json:"windows_auth,omitempty"`
 	Updates               appupdate.Config           `json:"updates,omitempty"`
 	Language              string                     `json:"language,omitempty"`
@@ -79,6 +80,7 @@ type appPreferences struct {
 	CustomQueues          []customQueueSpec          `json:"custom_queues,omitempty"`
 	QueueSeq              int                        `json:"queue_seq,omitempty"`
 	SortDesc              bool                       `json:"sort_desc,omitempty"`
+	TaskSortBy            string                     `json:"task_sort_by,omitempty"`
 	ManualTaskSort        bool                       `json:"manual_task_sort,omitempty"`
 	ManualTaskOrder       []string                   `json:"manual_task_order,omitempty"`
 }
@@ -159,6 +161,20 @@ func validFileType(name string) bool {
 }
 
 func (p *appPreferences) validate() {
+	switch p.TaskSortBy {
+	case "added", "name":
+	default:
+		p.TaskSortBy = "added"
+		// A stored descending name order is an explicit choice in older versions.
+		if p.SortDesc {
+			p.TaskSortBy = "name"
+		}
+	}
+	if value, err := download.NormalizeUserAgent(p.UserAgent); err == nil {
+		p.UserAgent = value
+	} else {
+		p.UserAgent = ""
+	}
 	if p.DragFileAction != "copy" {
 		p.DragFileAction = ""
 	}

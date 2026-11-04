@@ -951,34 +951,7 @@ func (pg *mainPage) visibleRows() []d1Row {
 		}
 		out = append(out, r)
 	}
-	sort.SliceStable(out, func(i, j int) bool {
-		a, b := strings.ToLower(out[i].rowName()), strings.ToLower(out[j].rowName())
-		if a == b {
-			return out[i].id < out[j].id
-		}
-		if pg.sortDesc {
-			return a > b
-		}
-		return a < b
-	})
-	order := pg.taskDragPreview
-	if len(order) == 0 && pg.preferences.ManualTaskSort {
-		order = pg.preferences.ManualTaskOrder
-	}
-	if len(order) > 0 {
-		rank := make(map[string]int, len(order))
-		for i, id := range order {
-			rank[id] = i
-		}
-		sort.SliceStable(out, func(i, j int) bool {
-			a, aok := rank[out[i].id]
-			b, bok := rank[out[j].id]
-			if aok != bok {
-				return aok
-			}
-			return aok && a < b
-		})
-	}
+	pg.sortTaskRows(out)
 	return out
 }
 
@@ -2167,15 +2140,12 @@ func (pg *mainPage) rowDone(r d1Row) string {
 }
 
 func (pg *mainPage) peakText(r d1Row) string {
-	pg.histMu.Lock()
-	defer pg.histMu.Unlock()
-	var peak float64
-	for _, sample := range pg.hist[r.id] {
-		if time.Since(sample.at) <= 60*time.Second && sample.bytesPerSecond > peak {
-			peak = sample.bytesPerSecond
-		}
+	peak := max(r.snap.PeakSpeed, r.snap.Speed)
+	if peak == 0 && r.snap.State == download.Done {
+		// Older completed journals have no recorded peak to recover.
+		return "—"
 	}
-	return bytesText(int64(peak)) + "/s"
+	return bytesText(peak) + "/s"
 }
 
 // ── 状态栏 ──────────────────────────────────────────────────────────────

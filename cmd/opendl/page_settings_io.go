@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 
+	"openDL/download"
+
 	"github.com/egoist/mygo"
 )
 
@@ -69,6 +71,10 @@ func (pg *mainPage) importSettings() {
 		pg.flash(tr("设置文件格式无效"))
 		return
 	}
+	if _, err := download.NormalizeUserAgent(prefs.UserAgent); err != nil {
+		pg.flash(tr("导入设置失败：") + err.Error())
+		return
+	}
 	prefs.validate()
 	prefs.ProxySecret = pg.preferences.ProxySecret
 	prefs.SiteLoginsSecret = pg.preferences.SiteLoginsSecret
@@ -85,6 +91,7 @@ func (pg *mainPage) importSettings() {
 		pg.limitValue = strconv.FormatFloat(prefs.RateMBps, 'f', -1, 64)
 	}
 	pg.mgr.SetDownloadDefaults(pg.saveDir, prefs.Connections)
+	_ = pg.mgr.SetUserAgent(prefs.UserAgent)
 	pg.mgr.SetConcurrency(prefs.TaskConcurrency)
 	pg.mgr.SetMaxConnections(prefs.MaxConnections)
 	pg.mgr.SetAllowUnverifiedResume(prefs.AllowUnverifiedResume)
@@ -108,6 +115,8 @@ func (pg *mainPage) importSettings() {
 		s.queueBaseErrors = nil
 		s.proxyRevision++
 		s.mediaMuxDraft, s.mediaMuxError = prefs.MediaMuxProgram, ""
+		s.userAgentDirty, s.userAgentError = false, ""
+		s.syncUserAgent()
 		s.siteRulesDraft, s.siteRulesError = prefs.SiteRulesURL, ""
 		s.siteRulesRevision++
 	}

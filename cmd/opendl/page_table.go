@@ -23,9 +23,28 @@ type taskDragFrame struct {
 	after, over, dropped bool
 }
 
-func (pg *mainPage) taskOrder() []string {
-	rows := pg.allRows()
+// sortTaskRows shares the displayed order with drag previews and saved manual
+// ordering. Creation timestamps remain full precision across dates and restarts.
+func (pg *mainPage) sortTaskRows(rows []d1Row) {
+	byName := pg.preferences.TaskSortBy == "name"
+	created := make(map[string]time.Time, len(rows))
+	if !byName {
+		for _, row := range rows {
+			at := row.snap.Created
+			if row.pending && row.snap.ID == "" {
+				at = pg.pendingCreated(row.id)
+			}
+			created[row.id] = at
+		}
+	}
 	sort.SliceStable(rows, func(i, j int) bool {
+		if !byName {
+			a, b := created[rows[i].id], created[rows[j].id]
+			if a.Equal(b) {
+				return rows[i].id < rows[j].id
+			}
+			return a.After(b)
+		}
 		a, b := strings.ToLower(rows[i].rowName()), strings.ToLower(rows[j].rowName())
 		if a == b {
 			return rows[i].id < rows[j].id
@@ -53,6 +72,11 @@ func (pg *mainPage) taskOrder() []string {
 		}
 		return aok && a < b
 	})
+}
+
+func (pg *mainPage) taskOrder() []string {
+	rows := pg.allRows()
+	pg.sortTaskRows(rows)
 	ids := make([]string, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.id)
@@ -294,7 +318,7 @@ func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns
 					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(tr("按名称排序")).Cursor(ui.CursorPointer)
 					b.Children(func() {
 						ui.Text(c, tr("名称")).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
-						if !pg.preferences.ManualTaskSort {
+						if !pg.preferences.ManualTaskSort && pg.preferences.TaskSortBy == "name" {
 							icon := style.IconArrowUp
 							if pg.sortDesc {
 								icon = style.IconArrowDown
@@ -303,11 +327,26 @@ func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns
 						}
 					})
 					b.OnClick(func() {
-						if pg.preferences.ManualTaskSort {
+						if pg.preferences.ManualTaskSort || pg.preferences.TaskSortBy != "name" {
 							pg.preferences.ManualTaskSort = false
+							pg.preferences.TaskSortBy = "name"
 						} else {
 							pg.sortDesc = !pg.sortDesc
 						}
+						pg.taskDragPreview = nil
+						pg.saveAppPreferences()
+					})
+				} else if column.spec.id == "added" {
+					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(tr("按添加时间排序")).Tooltip(tr("最新添加的任务在最上方")).Cursor(ui.CursorPointer)
+					b.Children(func() {
+						ui.Text(c, tr(column.spec.title)).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
+						if !pg.preferences.ManualTaskSort && pg.preferences.TaskSortBy != "name" {
+							style.Icon(c, style.IconArrowDown, 12, p.mu)
+						}
+					})
+					b.OnClick(func() {
+						pg.preferences.TaskSortBy = "added"
+						pg.preferences.ManualTaskSort = false
 						pg.taskDragPreview = nil
 						pg.saveAppPreferences()
 					})

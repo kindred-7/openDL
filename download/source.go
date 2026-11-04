@@ -71,6 +71,7 @@ func (m *Manager) updateSource(id, address string, headers map[string]string, ex
 	}
 	t.editing = true
 	t.workers.Add(1)
+	headers = downloadHeaders(headers, m.userAgent)
 	m.mu.Unlock()
 	defer t.workers.Done()
 	defer func() { m.mu.Lock(); t.editing = false; m.mu.Unlock() }()

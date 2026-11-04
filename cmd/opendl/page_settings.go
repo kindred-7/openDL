@@ -68,6 +68,8 @@ type settingsPage struct {
 	loginError                                             string
 	windowsOrigin, windowsPolicy, windowsSPN, windowsError string
 	mediaMuxDraft, mediaMuxError                           string
+	userAgentDraft, userAgentError                         string
+	userAgentDirty                                         bool
 	siteRulesDraft, siteRulesError                         string
 	siteRulesRevision                                      uint64
 	queueMainRate, queueNightRate                          string
@@ -159,6 +161,7 @@ var settingsEntries = []settingsEntry{
 	{"custom-categories", "下载", "自定义分类", "按扩展名自定义分类，可选归档子目录。", "自定义 分类 扩展名 目录 category"},
 	{"post-scan", "下载", "扫描程序", "下载完成后调用该程序检查文件，留空不启用。", "扫描 杀毒 防病毒 病毒 检查 scan"},
 	{"scan-args", "下载", "扫描参数", "空格分隔，{file} 表示文件路径；留空时文件作为唯一参数。", "参数 命令行 占位符 args"},
+	{"user-agent", "网络", "默认用户代理（UA）", "新任务未提供 User-Agent 时使用；浏览器或任务提供的标识优先。", "UA User-Agent UserAgent 用户代理 浏览器 请求头 客户端 标识"},
 	{"proxy", "网络", "下载代理", "", "网络 代理 HTTP HTTPS SOCKS5 直连 环境 认证 用户名 密码 排除"},
 	{"site-logins", "网络", "站点登录", "匹配站点的下载自动使用保存的登录凭据。", "登录 站点 认证 账号 用户名 密码 login"},
 	{"windows-auth", "网络", "系统集成认证", "仅对明确配置的站点使用当前系统用户身份。", "Kerberos NTLM SSPI GSSAPI Negotiate SSO Windows Linux macOS"},
@@ -203,6 +206,7 @@ var settingsGroups = []settingsGroup{
 	{"自定义分类", "下载", []string{"custom-categories"}},
 	{"下载后扫描", "下载", []string{"post-scan", "scan-args"}},
 
+	{"下载请求", "网络", []string{"user-agent"}},
 	{"下载代理", "网络", []string{"proxy"}},
 	{"站点登录", "网络", []string{"site-logins"}},
 	{"系统集成认证", "网络", []string{"windows-auth"}},
@@ -386,6 +390,7 @@ func (pg *mainPage) openSettings() {
 	s.language = i18n.Locale()
 	s.syncUpdateDraft()
 	s.mediaMuxDraft = pg.preferences.MediaMuxProgram
+	s.syncUserAgent()
 	s.siteRulesDraft, s.siteRulesError = pg.preferences.SiteRulesURL, ""
 	s.taskConcurrency = strconv.Itoa(pg.preferences.TaskConcurrency)
 	s.connections = strconv.Itoa(pg.preferences.Connections)
@@ -429,6 +434,9 @@ func (pg *mainPage) refreshSettingsWindow() {
 	s.detail = pg.detailPlacement
 	if !s.proxyDirty && !s.proxySaving {
 		s.syncProxy()
+	}
+	if !s.userAgentDirty {
+		s.syncUserAgent()
 	}
 	if !s.directoryDirty {
 		s.directory = pg.saveDir
@@ -1201,6 +1209,8 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "proxy":
 					d1Choice(c, p, "代理模式", &s.proxyMode, []d1Option{{value: "environment", label: "环境代理"}, {value: "system", label: "系统代理"}, {value: "direct", label: "不使用代理"}, {value: "manual", label: "手动代理"}}).
 						Width(settingsControlWidth).Shrink(0).Tooltip(tr("代理设置用于后续网络请求，已传输的响应继续使用原连接")).OnChange(s.proxyEdited)
+				case "user-agent":
+					d1Button(c, p, "恢复默认", "").OnClick(s.restoreDefaultUserAgent)
 				case "clipboard":
 					settingsSwitch(c, p, "剪贴板监听", &s.owner.clipOn).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "unverified-resume":
@@ -1306,6 +1316,8 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 			s.updateFields(c, p)
 		case "proxy":
 			s.proxyFields(c, p)
+		case "user-agent":
+			s.userAgentFields(c, p)
 		case "site-logins":
 			s.siteLoginsFields(c, p)
 		case "windows-auth":

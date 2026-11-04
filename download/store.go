@@ -30,6 +30,7 @@ type storedTask struct {
 	Created                   time.Time              `json:"created"`
 	Finished                  time.Time              `json:"finished,omitempty"`
 	Elapsed                   time.Duration          `json:"elapsed,omitempty"`
+	PeakSpeed                 int64                  `json:"peak_speed,omitempty"`
 	BrowserOrigin             bool                   `json:"browser_origin,omitempty"`
 	NightSince                time.Time              `json:"night_since,omitempty"`
 	Total                     int64                  `json:"total"`
@@ -122,7 +123,7 @@ func (m *Manager) EnablePersistence(dir string) error {
 			conns = m.conns
 		}
 		t := &Task{id: id, url: rec.Request.URL, pageURL: rec.Request.PageURL, title: rec.Request.Title, nameHint: rec.Request.Name, keepExtension: rec.Request.KeepExtension, mediaMode: rec.Request.MediaMode, mediaQuality: rec.Request.MediaQuality, audioLanguage: rec.Request.AudioLanguage, syncMinutes: rec.Request.SyncMinutes, queue: rec.Request.Queue,
-			headers: cloneHeaders(rec.Request.Headers), conns: conns, directory: rec.Request.Directory, openFolder: rec.Request.OpenFolder, expectedSHA256: rec.Request.SHA256, verifiedSHA256: rec.VerifiedSHA256, failedSHA256: rec.FailedSHA256, requireSignature: rec.Request.RequireSignature, signature: rec.Request.Signature, signatureKey: rec.Request.SignatureKey,
+			headers: downloadHeaders(rec.Request.Headers, m.userAgent), conns: conns, directory: rec.Request.Directory, openFolder: rec.Request.OpenFolder, expectedSHA256: rec.Request.SHA256, verifiedSHA256: rec.VerifiedSHA256, failedSHA256: rec.FailedSHA256, requireSignature: rec.Request.RequireSignature, signature: rec.Request.Signature, signatureKey: rec.Request.SignatureKey,
 			filePath: rec.FilePath, created: rec.Created, finished: rec.Finished, cancel: make(chan struct{}), resumeTotal: rec.Total, resumeValidator: rec.Validator, resumeResource: rec.ResourceFingerprint,
 			publishSHA256: rec.PublishSHA256, publishSize: rec.PublishSize}
 		t.signatureVerified.Store(rec.SignatureVerified && rec.State == Done)
@@ -132,6 +133,7 @@ func (m *Manager) EnablePersistence(dir string) error {
 		t.resumeUnverified = rec.UnverifiedChunks
 		t.browserOrigin = rec.BrowserOrigin
 		t.elapsed.Store(int64(rec.Elapsed))
+		t.peakSpeed.Store(max(int64(0), rec.PeakSpeed))
 		if (t.mediaMode == "dash-fmp4" || t.mediaMode == "hls-ts") && rec.State != Done {
 			t.dashVideo = restoreDASHCheckpoint(rec.DASHVideo)
 			t.dashAudio = restoreDASHCheckpoint(rec.DASHAudio)
@@ -306,6 +308,7 @@ func (m *Manager) saveTaskLocked(t *Task) error {
 	rec.StableResourceFingerprint = t.resumeStableResource
 	rec.UnverifiedChunks = t.resumeUnverified
 	rec.Elapsed = s.Elapsed
+	rec.PeakSpeed = s.PeakSpeed
 	rec.BrowserOrigin = s.BrowserOrigin
 	rec.SignatureVerified = s.SignatureVerified
 	rec.Request.SyncMinutes = s.SyncMinutes
