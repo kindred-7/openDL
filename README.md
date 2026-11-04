@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/opendl-logo.svg" alt="OpenDL logo" width="96" />
+<img src="assets/opendl-icon-128.png" alt="OpenDL logo" width="96" />
 
 # OpenDL
 
@@ -15,7 +15,7 @@
 
 [下载](https://github.com/kindred-7/openDL/releases) · [问题反馈](https://github.com/kindred-7/openDL/issues) · [隐私政策](privacy/privacy.md) · [更新日志](https://github.com/kindred-7/openDL/releases)
 
-<sup>简体中文 · English README coming soon</sup>
+<sup>简体中文 · [English](README.en.md)</sup>
 
 </div>
 
