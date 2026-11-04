@@ -91,7 +91,7 @@ func (pg *mainPage) applicationMenu(c *ui.Context, p *d1Palette) {
 					d1DropdownItem(c, p, "导出设置", "download", true).OnClick(func() { pg.showAppMenu = false; pg.exportSettings() })
 					d1DropdownItem(c, p, "检查更新", "redo", true).OnClick(func() {
 						pg.showAppMenu = false
-						pg.openUpdateSettings()
+						pg.openUpdateDialog()
 					})
 					d1DropdownItem(c, p, "关于", "info", true).OnClick(func() { pg.showAppMenu = false; pg.copyFeedbackKey = ""; pg.showAbout = true })
 				})

@@ -98,7 +98,7 @@ func updateFailureMessage(args []string) string {
 }
 
 func (pg *mainPage) updateChanged() {
-	if pg.updater.release != nil && !pg.updater.busy && pg.updater.message != "" && pg.updater.message != fmt.Sprintf(tr("发现新版本 %s"), appVersionLabel(pg.updater.release.Manifest.Version)) {
+	if !pg.updater.showDialog && pg.updater.release != nil && !pg.updater.busy && pg.updater.message != "" && pg.updater.message != fmt.Sprintf(tr("发现新版本 %s"), appVersionLabel(pg.updater.release.Manifest.Version)) {
 		pg.flash(pg.updater.message)
 	}
 	if pg.win != nil {
@@ -261,7 +261,9 @@ func (pg *mainPage) checkForUpdates(quiet bool) {
 				pg.updater.message = tr("当前已是最新版本")
 				if release != nil {
 					pg.updater.message = fmt.Sprintf(tr("发现新版本 %s"), appVersionLabel(release.Manifest.Version))
-					pg.flash(pg.updater.message)
+					if !pg.updater.showDialog {
+						pg.flash(pg.updater.message)
+					}
 				}
 			}
 			pg.updateChanged()
@@ -526,12 +528,24 @@ func (pg *mainPage) updateDialog(c *ui.Context, p *d1Palette) {
 		panel.Width(420).Padding(18).Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).Label(tr("应用更新"))
 		ui.Column(c).FillWidth().Gap(12).Children(func() {
 			ui.Text(c, tr("应用更新")).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
+			ui.Text(c, fmt.Sprintf(tr("当前版本：%s"), d1AppVersion())).FontSize(style.TextSM).TextColor(p.mu)
 			if pg.updater.message != "" {
 				ui.Text(c, pg.updater.message).Role(ui.RoleStatus).FontSize(style.TextSM).TextColor(p.mu)
+			}
+			if release := pg.updater.release; release != nil && !pg.updater.busy {
+				notes := strings.TrimSpace(release.Manifest.Notes)
+				if notes == "" {
+					notes = tr("暂无更新说明")
+				}
+				c.Key("update-dialog-notes")
+				ui.Scroll(c).FillWidth().MaxHeight(220).Children(func() {
+					ui.Text(c, notes).FillWidth().FontSize(style.TextSM).TextColor(p.mu).Selectable()
+				})
 			}
 			if pg.updater.downloading {
 				pg.updateProgress(c, p)
 			}
+			c.Key("update-dialog-actions")
 			ui.Row(c).FillWidth().Gap(8).Justify(ui.End).Children(func() {
 				if pg.updater.downloading {
 					d1Button(c, p, "取消", "").OnClick(func() {
@@ -547,6 +561,8 @@ func (pg *mainPage) updateDialog(c *ui.Context, p *d1Palette) {
 					d1PrimaryButton(c, p, "重启安装", "", !pg.updater.busy).OnClick(pg.restartForUpdate)
 				} else if !pg.updater.busy && pg.updater.release != nil {
 					d1PrimaryButton(c, p, "下载更新", "down").OnClick(pg.installUpdate)
+				} else if !pg.updater.busy {
+					d1Button(c, p, "重新检查", "redo").OnClick(func() { pg.checkForUpdates(false) })
 				}
 			})
 		})

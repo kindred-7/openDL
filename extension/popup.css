@@ -1,6 +1,6 @@
 :root {
   color-scheme: light dark;
-  /* Radix 灰度令牌（shadcn/ui zinc，nova 风格）：与桌面端 docs/design.html :root 一致 */
+  /* 与桌面端保持一致的 Radix 灰度令牌。 */
   --bg: #fff; --fg: #09090b; --mu: #71717a; --mu2: #a1a1aa;
   --bd: #e4e4e7; --bd2: #d4d4d8; --card: #fafafa; --sel: #f4f4f5;
   --pri: #0d74ce; --onpri: #fff; --focus: #5eb1ef; --ok: #16a34a; --bad: #dc2626;

@@ -1,4 +1,6 @@
 {
+  "当前版本：%s": "Current version: %s",
+  "重新检查": "Check again",
   "按添加时间排序": "Sort by date added",
   "最新添加的任务在最上方": "Newest tasks appear at the top",
   "默认用户代理（UA）": "Default user agent (UA)",

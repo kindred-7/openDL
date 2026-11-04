@@ -6,8 +6,8 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// 设计规则的字体（docs/design-rules.md）：Geist 排拉丁，MiSans 排中文。
-// 只内嵌文档用到的字重：MiSans 400/500；Geist 是可变字重。
+// 界面字体：Geist 排拉丁，MiSans 排中文。
+// 内嵌 MiSans 400/500 字重及 Geist 可变字体。
 //
 //go:embed fonts/Geist.ttf
 var geist []byte

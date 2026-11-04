@@ -801,7 +801,7 @@ func main() {
 	if runUpdateHelper() {
 		return
 	}
-	// 设计规则字体：Geist + MiSans（docs/design-rules.md）。
+	// 注册界面字体：Geist + MiSans。
 	if err := style.RegisterFonts(); err != nil {
 		log.Printf("register fonts: %v", err)
 	}
@@ -963,7 +963,7 @@ func main() {
 		dark := mygo.Theme.IsDark()
 		// 启动时最小化到托盘：窗口以隐藏状态创建，由托盘入口唤回。
 		hidden := preferences.MinTrayStart
-		// docs/design.html 的 1:1 复刻页面：自定义标题栏（原生窗口按钮）
+		// 主界面：自定义标题栏（原生窗口按钮）
 		// + 工具栏 + 侧栏/统计/任务表/详情面板，数据由 download.Manager 驱动。
 		pg := &mainPage{mgr: mgr, apiServer: srv, saveDir: dir, dark: dark, themeMode: themeMode, preferences: preferences, preferencesLoaded: true, detailPlacement: loadDetailPlacement(), panes: loadPanelLayout()}
 		pg.showExtensionGuide = shouldShowExtensionGuide()

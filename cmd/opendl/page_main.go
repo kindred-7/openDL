@@ -1,6 +1,6 @@
 package main
 
-// docs/design.html（“Downloader 主界面（shadcn nova）”）的 MyGo 原生 1:1 复刻：
+// 下载管理主界面：
 //
 //   - 标题栏（38px，保留原生窗口按钮）：品牌、中置搜索、主题/设置、
 //     系统原生窗口按钮，整行可拖动；

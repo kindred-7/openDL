@@ -2,7 +2,7 @@ package style
 
 import "github.com/egoist/mygo/ui"
 
-// 设计规则：docs/design.html 的样式、字号字重沉淀（详见 docs/design-rules.md）。
+// 桌面界面的样式、字号和字重规则。
 //
 //	字体   Geist（拉丁）+ MiSans（中文），正文使用 400 / 500，品牌使用较粗字重
 //	颜色   Radix Gray 中性色与黑白主色，Green/Amber/Red 状态色

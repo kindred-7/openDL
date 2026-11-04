@@ -149,14 +149,15 @@ func appVersionLabel(version string) string {
 	return strings.TrimPrefix(strings.TrimSpace(version), "v")
 }
 
-func (pg *mainPage) openUpdateSettings() {
-	pg.openSettings()
-	if s := pg.settingsWindow; s != nil && s.win != nil {
-		s.section = "常规"
-		s.query = "应用更新"
-		s.searchSection = ""
-		s.win.Invalidate()
-		pg.checkForUpdates(false)
+func (pg *mainPage) openUpdateDialog() {
+	pg.updater.showDialog = true
+	pg.updater.badgeOpen = false
+	pg.updater.badgeDismissed = true
+	// An ongoing check or download is shared with this dialog; do not start
+	// another request or navigate away from the main window.
+	pg.checkForUpdates(false)
+	if pg.win != nil {
+		pg.win.Invalidate()
 	}
 }
 
@@ -213,7 +214,7 @@ func (pg *mainPage) aboutDialog(c *ui.Context, p *d1Palette) {
 								pg.markCopied("version")
 							}
 						})
-						d1Button(c, p, "检查更新", "redo").OnClick(func() { pg.showAbout = false; pg.openUpdateSettings() })
+						d1Button(c, p, "检查更新", "redo").OnClick(func() { pg.showAbout = false; pg.openUpdateDialog() })
 					})
 					ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
 						d1AboutLink(c, p, "项目主页").OnClick(func() { pg.openAboutLink("https://gitcode.com/kindred-wu/openDL") })
