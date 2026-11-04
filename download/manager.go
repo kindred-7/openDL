@@ -40,6 +40,9 @@ const (
 	Canceled State = "canceled"
 )
 
+// defaultUserAgent is used only when a task supplies no client identity.
+const defaultUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+
 // Request is one download order, as the extension sends it.
 type Request struct {
 	URL           string            `json:"url"`
@@ -245,6 +248,9 @@ func (t *Task) newRequest(url string) (*http.Request, context.CancelFunc, error)
 	t.metaMu.Unlock()
 	for k, v := range headers {
 		req.Header.Set(k, v)
+	}
+	if strings.TrimSpace(req.Header.Get("User-Agent")) == "" {
+		req.Header.Set("User-Agent", defaultUserAgent)
 	}
 	if req.Header.Get("Referer") == "" {
 		if referer := sourceReferer(pageURL, req.URL); referer != "" {
