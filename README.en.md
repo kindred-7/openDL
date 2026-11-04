@@ -15,7 +15,7 @@ Manage downloads in one place, discover links and media through browser extensio
 
 [Download](https://github.com/kindred-7/openDL/releases) · [Report an issue](https://github.com/kindred-7/openDL/issues) · [Privacy policy](privacy/privacy.md) · [Changelog](https://github.com/kindred-7/openDL/releases)
 
-<sup>[简体中文](README.md) · English</sup>
+[简体中文](README.md) | **English**
 
 </div>
 
@@ -31,7 +31,7 @@ Paste a URL or capture a resource from your browser to keep downloads organized 
 
 <div align="center">
 
-<img src="assets/opendl-screenshot.png" alt="OpenDL interface" width="720" />
+<img src="assets/opendl-screenshot-en.png" alt="OpenDL interface" width="720" />
 
 </div>
 
