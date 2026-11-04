@@ -322,7 +322,7 @@ jobs:
         working-directory: source
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          UPLOAD_TIMEOUT_SEC: ${{ vars.GITCODE_UPLOAD_TIMEOUT_SEC || '1800' }}
+          UPLOAD_TIMEOUT_SEC: ${{ vars.GITCODE_UPLOAD_TIMEOUT_SEC || '2400' }}
         run: |
           $ErrorActionPreference = 'Stop'
           if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }

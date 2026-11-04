@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory = $true)][string]$NotesFile,
     [string]$Tag = '',
     [ValidateRange(1, 5)][int]$UploadAttempts = 2,
-    [ValidateRange(120, 2400)][int]$UploadTimeoutSec = 1800
+    [ValidateRange(120, 2400)][int]$UploadTimeoutSec = 2400
 )
 
 $ErrorActionPreference = 'Stop'
@@ -86,19 +86,33 @@ function ConvertTo-CurlConfigValue([string]$Value) {
     if ($Value -match '[\r\n\x00]') { throw 'Invalid upload configuration value.' }
     return '"' + $Value.Replace('\', '\\').Replace('"', '\"') + '"'
 }
+function Read-CurlProgress([hashtable]$State, [char[]]$Buffer, [int]$Count) {
+    $text = $State.Tail + [string]::new($Buffer, 0, $Count)
+    $lines = $text -split '[\r\n]'
+    $State.Tail = $lines[-1]
+    for ($i = 0; $i -lt $lines.Count - 1; $i++) {
+        # Accept only curl's twelve numeric meter columns. Raw stderr may
+        # contain signed URLs or authorization headers and must never be logged.
+        if ($lines[$i] -match '^\s*\d{1,3}\s+[0-9.]+[kKMGTPE]?\s+\d{1,3}\s+[0-9.]+[kKMGTPE]?\s+\d{1,3}\s+[0-9.]+[kKMGTPE]?\s+[0-9.]+[kKMGTPE]?\s+[0-9.]+[kKMGTPE]?\s+[0-9:-]+\s+[0-9:-]+\s+[0-9:-]+\s+[0-9.]+[kKMGTPE]?\s*$') {
+            $State.Row = $lines[$i].Trim()
+        }
+    }
+    if ($State.Tail.Length -gt 4096) { $State.Tail = '' }
+}
 function Send-ReleaseFile($Upload, [string]$Path) {
     $uploadUri = $null
     if (-not [Uri]::TryCreate([string]$Upload.url, [UriKind]::Absolute, [ref]$uploadUri) -or $uploadUri.Scheme -cne 'https') { throw 'GitCode returned an invalid upload URL.' }
     $size = (Get-Item -LiteralPath $Path).Length
     $timeout = if ($size -le 1MB) { [math]::Min($UploadTimeoutSec, 120) } else { $UploadTimeoutSec }
-    $progressFile = Join-Path ([IO.Path]::GetTempPath()) ('opendl-upload-' + [guid]::NewGuid().ToString('N') + '.log')
+    # Use a regular file: Windows NUL can be recognized as a character device,
+    # which lets curl suppress the progress meter as if writing to a terminal.
+    $responseFile = Join-Path ([IO.Path]::GetTempPath()) ('opendl-upload-response-' + [guid]::NewGuid().ToString('N') + '.tmp')
     Write-Host "Upload endpoint: $($uploadUri.DnsSafeHost); bytes=$size; curl=$($curl.Source); connect limit: 30s; low-speed limit: 1 KiB/s for 90s; total limit: ${timeout}s."
     $config = @(
-        'fail', 'globoff', 'proto = "=https"',
+        'fail', 'globoff', 'no-silent', 'progress-meter', 'proto = "=https"',
         'connect-timeout = 30', "max-time = $timeout",
         'speed-limit = 1024', 'speed-time = 90',
-        ('stderr = ' + (ConvertTo-CurlConfigValue $progressFile)),
-        ('output = ' + (ConvertTo-CurlConfigValue $(if ($env:OS -eq 'Windows_NT') { 'NUL' } else { '/dev/null' }))),
+        ('output = ' + (ConvertTo-CurlConfigValue $responseFile)),
         ('url = ' + (ConvertTo-CurlConfigValue $uploadUri.AbsoluteUri)),
         ('upload-file = ' + (ConvertTo-CurlConfigValue $Path)),
         'write-out = "%{http_code}|%{size_upload}|%{speed_upload}|%{time_namelookup}|%{time_connect}|%{time_appconnect}|%{time_starttransfer}|%{time_total}"'
@@ -126,30 +140,40 @@ function Send-ReleaseFile($Upload, [string]$Path) {
         [void]$process.Start()
         $started = $true
         $output = $process.StandardOutput.ReadToEndAsync()
-        $errors = $process.StandardError.ReadToEndAsync()
+        $progress = @{ Tail = ''; Row = '' }
+        $errorBuffer = [char[]]::new(4096)
+        $errorRead = $process.StandardError.ReadAsync($errorBuffer, 0, $errorBuffer.Length)
+        $nextProgress = 15
         $process.StandardInput.WriteLine(($config -join "`n"))
         $process.StandardInput.Close()
-        while (-not $process.WaitForExit(15000)) {
-            $row = 'progress temporarily unavailable'
-            try {
-                $stream = [IO.FileStream]::new($progressFile, [IO.FileMode]::Open, [IO.FileAccess]::Read, ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-                $reader = [IO.StreamReader]::new($stream)
-                try { $rows = $reader.ReadToEnd() -split '[\r\n]+' } finally { $reader.Dispose() }
-                # Never print stderr errors or arbitrary text: they may contain
-                # a signed URL. Only curl's numeric transfer-meter row is safe.
-                $safe = @($rows | Where-Object { $_ -match '^\s*[0-9]+\s' -and $_ -notmatch '[^0-9a-zA-Z% .:/+\-]' } | Select-Object -Last 1)
-                if ($safe.Count -gt 0) { $row = $safe[0].Trim() }
-            } catch { }
-            Write-Host ("Upload elapsed={0:N0}s; progress={1}" -f $clock.Elapsed.TotalSeconds, $row)
+        while ($true) {
+            # Drain the pipe while curl runs, without shared-file access or
+            # waiting for a newline (the meter normally uses carriage returns).
+            while ($null -ne $errorRead -and $errorRead.IsCompleted) {
+                $count = $errorRead.GetAwaiter().GetResult()
+                if ($count -eq 0) { $errorRead = $null; break }
+                Read-CurlProgress $progress $errorBuffer $count
+                $errorRead = $process.StandardError.ReadAsync($errorBuffer, 0, $errorBuffer.Length)
+            }
+            if ($process.WaitForExit(250)) { break }
+            if ($clock.Elapsed.TotalSeconds -ge $nextProgress) {
+                $row = if ($progress.Row) { $progress.Row } else { 'waiting for numeric transfer progress' }
+                Write-Host ("Upload elapsed={0:N0}s; progress={1}" -f $clock.Elapsed.TotalSeconds, $row)
+                $nextProgress = $clock.Elapsed.TotalSeconds + 15
+            }
             if ($clock.Elapsed.TotalSeconds -gt $timeout + 30) {
                 $process.Kill()
                 $process.WaitForExit()
                 throw 'Upload transport exceeded its process watchdog.'
             }
         }
+        while ($null -ne $errorRead) {
+            $count = $errorRead.GetAwaiter().GetResult()
+            if ($count -eq 0) { break }
+            Read-CurlProgress $progress $errorBuffer $count
+            $errorRead = $process.StandardError.ReadAsync($errorBuffer, 0, $errorBuffer.Length)
+        }
         $stats = $output.GetAwaiter().GetResult().Trim().Split('|')
-        # Discard stderr: transport errors can include the signed URL.
-        [void]$errors.GetAwaiter().GetResult()
         if ($stats.Count -ne 8 -or ($stats -join '|') -notmatch '^[0-9.|]+$') { throw 'Upload transport returned invalid diagnostics.' }
         Write-Host "Upload result: curl=$($process.ExitCode), HTTP=$($stats[0]), sent=$($stats[1]) bytes, average=$($stats[2]) bytes/s, DNS=$($stats[3])s, TCP=$($stats[4])s, TLS=$($stats[5])s, first response=$($stats[6])s, total=$($stats[7])s."
         if ($process.ExitCode -eq 28 -and [double]$stats[1] -gt 0 -and [double]$stats[1] -lt $size -and [double]$stats[2] -gt 0) {
@@ -160,7 +184,7 @@ function Send-ReleaseFile($Upload, [string]$Path) {
     } finally {
         if ($started -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
         $process.Dispose()
-        Remove-Item -LiteralPath $progressFile -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $responseFile -Force -ErrorAction SilentlyContinue
     }
 }
 function Test-ReleaseFile([string]$Path) {
