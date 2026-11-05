@@ -63,14 +63,12 @@ go tool mygo build                             # 构建应用
 
 ### 浏览器扩展
 
-**Chrome / Microsoft Edge** — 商店版本提交审核中；在商店可用前，可手动加载：
+首次通过 Windows 安装向导安装 OpenDL 后，安装器会在默认浏览器中打开扩展商店。也可以打开「设置 → 网络 → 安装浏览器扩展」，选择要打开的浏览器。
 
-1. 启动 OpenDL，从应用菜单打开「浏览器扩展安装说明」。
-2. 打开浏览器扩展管理页，开启开发者模式。
-3. 选择「加载已解压的扩展程序」，指向安装目录中的 `extension` 文件夹。
-4. 打开普通网页，点击扩展图标，确认连接状态为「已连接」。
+- **Chrome / Microsoft Edge** — 在 [Chrome 网上应用店](https://chromewebstore.google.com/detail/opendl/gppemfjpooijagmiigefeonekdkiodah)添加扩展。Edge 可能会要求先允许来自其他商店的扩展。
+- **Firefox** — 在 [Firefox 附加组件商店](https://addons.mozilla.org/firefox/addon/opendl/)添加扩展。
 
-**Firefox** — 从扩展管理页安装安装目录中的 `extension/OpenDL-firefox.xpi`（Mozilla 签名包）。桌面应用更新不会自动更新 Firefox 扩展，需以新的签名包手动替换。
+在浏览器中确认安装后，启动 OpenDL。打开普通网页，点击扩展图标，确认连接状态为「已连接」。
 
 ## 快速开始
 

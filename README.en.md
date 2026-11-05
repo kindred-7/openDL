@@ -63,14 +63,12 @@ The installer is written to `build/windows-<architecture>/OpenDL Setup <version>
 
 ### Browser extension
 
-**Chrome / Microsoft Edge** — Store submissions are under review. Until the extension is available in the stores, load it manually:
+After a fresh installation through the Windows setup wizard, the installer opens the extension listing in your default browser. To choose a browser, go to **Settings → Network → Install browser extension**.
 
-1. Launch OpenDL and open the browser extension installation instructions from the app menu.
-2. Open the browser's extension management page and enable developer mode.
-3. Choose “Load unpacked” and select the `extension` folder in the installation directory.
-4. Open a regular web page, click the extension icon and confirm that it is connected.
+- **Chrome / Microsoft Edge** — Add the extension from the [Chrome Web Store](https://chromewebstore.google.com/detail/opendl/gppemfjpooijagmiigefeonekdkiodah). Edge may ask you to allow extensions from other stores first.
+- **Firefox** — Add the extension from [Firefox Add-ons](https://addons.mozilla.org/firefox/addon/opendl/).
 
-**Firefox** — Install `extension/OpenDL-firefox.xpi` from the installation directory through the extension management page. This package is signed by Mozilla. Desktop app updates do not automatically update the Firefox extension; replace it manually with the new signed package.
+After confirming the installation in your browser, launch OpenDL. Open a regular web page and click the extension icon to check that it is connected.
 
 ## Quick start
 

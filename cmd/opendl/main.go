@@ -966,7 +966,6 @@ func main() {
 		// 主界面：自定义标题栏（原生窗口按钮）
 		// + 工具栏 + 侧栏/统计/任务表/详情面板，数据由 download.Manager 驱动。
 		pg := &mainPage{mgr: mgr, apiServer: srv, saveDir: dir, dark: dark, themeMode: themeMode, preferences: preferences, preferencesLoaded: true, detailPlacement: loadDetailPlacement(), panes: loadPanelLayout()}
-		pg.showExtensionGuide = shouldShowExtensionGuide()
 		pg.syncExtensionTheme()
 		pg.proxyPassword = proxyPassword
 		pg.proxyError = proxySettingsStatus(proxyErr)

@@ -161,7 +161,7 @@ func (pg *mainPage) openUpdateDialog() {
 	}
 }
 
-func (pg *mainPage) openAboutLink(address string) {
+func (pg *mainPage) openExternalLink(address string) {
 	win := pg.win
 	go func() {
 		if err := mygo.Shell.OpenExternal(address); err != nil && win != nil {
@@ -217,9 +217,9 @@ func (pg *mainPage) aboutDialog(c *ui.Context, p *d1Palette) {
 						d1Button(c, p, "检查更新", "redo").OnClick(func() { pg.showAbout = false; pg.openUpdateDialog() })
 					})
 					ui.Row(c).FillWidth().Gap(4).AlignItems(ui.Center).Children(func() {
-						d1AboutLink(c, p, "项目主页").OnClick(func() { pg.openAboutLink("https://gitcode.com/kindred-wu/openDL") })
-						d1AboutLink(c, p, "问题反馈").OnClick(func() { pg.openAboutLink("https://github.com/kindred-7/openDL/issues") })
-						d1AboutLink(c, p, "MIT 开源协议").OnClick(func() { pg.openAboutLink("https://github.com/kindred-7/openDL/blob/main/LICENSE") })
+						d1AboutLink(c, p, "项目主页").OnClick(func() { pg.openExternalLink("https://gitcode.com/kindred-wu/openDL") })
+						d1AboutLink(c, p, "问题反馈").OnClick(func() { pg.openExternalLink("https://github.com/kindred-7/openDL/issues") })
+						d1AboutLink(c, p, "MIT 开源协议").OnClick(func() { pg.openExternalLink("https://github.com/kindred-7/openDL/blob/main/LICENSE") })
 					})
 				})
 				ui.Box(c).FillWidth().Height(1).Background(p.bd)

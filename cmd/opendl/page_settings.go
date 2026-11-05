@@ -3,6 +3,7 @@ package main
 import (
 	"math"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -70,6 +71,8 @@ type settingsPage struct {
 	mediaMuxDraft, mediaMuxError                           string
 	userAgentDraft, userAgentError                         string
 	userAgentDirty                                         bool
+	browserExtensionOpening                                bool
+	browserExtensionError                                  string
 	siteRulesDraft, siteRulesError                         string
 	siteRulesRevision                                      uint64
 	queueMainRate, queueNightRate                          string
@@ -87,6 +90,7 @@ const (
 	settingsSidebarMax     float32 = 360
 	settingsContentMin     float32 = 440
 	settingsControlWidth   float32 = 140
+	settingsInputHeight    float32 = 32
 )
 
 type settingsEntry struct{ id, section, title, description, keywords string }
@@ -138,6 +142,7 @@ func categoryTitle(id string) string {
 }
 
 var settingsEntries = []settingsEntry{
+	{"browser-extension", "网络", "安装浏览器扩展", "选择浏览器打开扩展商店，并在浏览器中确认安装。", "浏览器 扩展 插件 商店 接管 Chrome Edge Firefox browser extension addon store"},
 	{"updates", "常规", "应用更新", "使用可信发布源检查更新，安装失败时尝试恢复程序文件。", "更新 版本 发布 签名 自动 update version release signature"},
 	{"language", "常规", "语言", "选择应用显示语言，立即生效。", "语言 language English 中文"},
 	{"appearance", "界面", "外观", "选择主题或跟随系统。", "主题 深色 浅色 跟随系统 颜色"},
@@ -206,6 +211,7 @@ var settingsGroups = []settingsGroup{
 	{"自定义分类", "下载", []string{"custom-categories"}},
 	{"下载后扫描", "下载", []string{"post-scan", "scan-args"}},
 
+	{"安装浏览器扩展", "网络", []string{"browser-extension"}},
 	{"下载请求", "网络", []string{"user-agent"}},
 	{"下载代理", "网络", []string{"proxy"}},
 	{"站点登录", "网络", []string{"site-logins"}},
@@ -216,6 +222,10 @@ var settingsGroups = []settingsGroup{
 	{"夜间队列", "计划", []string{"night-enabled", "night-time"}},
 	{"完成后动作", "计划", []string{"finish-action", "finish-program", "finish-args"}},
 	{"队列管理", "计划", []string{"custom-queues"}},
+}
+
+func (g settingsGroup) available() bool {
+	return g.ids[0] != "browser-extension" || runtime.GOOS == "windows"
 }
 
 // settingsEntryByID 返回指定编号的设置项。
@@ -949,6 +959,9 @@ func (s *settingsPage) view(c *ui.Context) {
 	matchingSections := map[string]bool{}
 	if query != "" {
 		for _, group := range settingsGroups {
+			if !group.available() {
+				continue
+			}
 			for _, id := range group.ids {
 				if settingsEntryMatches(settingsEntryByID(id), query) {
 					matchingSections[group.section] = true
@@ -1041,6 +1054,9 @@ func (s *settingsPage) view(c *ui.Context) {
 						count := 0
 						lastSection := ""
 						for _, group := range settingsGroups {
+							if !group.available() {
+								continue
+							}
 							if query != "" && s.searchSection != "" && group.section != s.searchSection {
 								continue
 							}
@@ -1209,8 +1225,6 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "proxy":
 					d1Choice(c, p, "代理模式", &s.proxyMode, []d1Option{{value: "environment", label: "环境代理"}, {value: "system", label: "系统代理"}, {value: "direct", label: "不使用代理"}, {value: "manual", label: "手动代理"}}).
 						Width(settingsControlWidth).Shrink(0).Tooltip(tr("代理设置用于后续网络请求，已传输的响应继续使用原连接")).OnChange(s.proxyEdited)
-				case "user-agent":
-					d1Button(c, p, "恢复默认", "").OnClick(s.restoreDefaultUserAgent)
 				case "clipboard":
 					settingsSwitch(c, p, "剪贴板监听", &s.owner.clipOn).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "unverified-resume":
@@ -1314,6 +1328,8 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 			}
 		case "updates":
 			s.updateFields(c, p)
+		case "browser-extension":
+			s.browserExtensionFields(c, p)
 		case "proxy":
 			s.proxyFields(c, p)
 		case "user-agent":
@@ -1906,7 +1922,7 @@ func (s *settingsPage) shortcutFields(c *ui.Context, p *d1Palette) {
 
 func settingsInput(c *ui.Context, p *d1Palette, label, key string, value *string, hint string) ui.Element {
 	c.Key(key)
-	input := ui.TextInputBase(c, value).Height(32).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd2).
+	input := ui.TextInputBase(c, value).Height(settingsInputHeight).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd2).
 		Background(p.bg).TextColor(p.fg).FontSize(style.TextSM).Label(tr(label)).Tooltip(*value)
 	if hint != "" {
 		input.Placeholder(tr(hint))

@@ -9,8 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-// Official Lucide SVG sources, pinned and licensed in lucide/README.md.
-// Keep the existing constants so both native page implementations share one API.
+// Lucide SVG sources are pinned and licensed in lucide/README.md.
 const (
 	IconDownload   = "download"
 	IconRSS        = "rss"
@@ -50,10 +49,17 @@ const (
 	IconStatus     = "circle-dot"
 )
 
-//go:embed lucide/icons/*.svg lucide/LICENSE
-var lucideSources embed.FS
+// Browser marks come from Bootstrap Icons v1.13.1 (https://github.com/twbs/icons).
+const (
+	IconBrowserChrome  = "browser-chrome"
+	IconBrowserEdge    = "browser-edge"
+	IconBrowserFirefox = "browser-firefox"
+)
 
-var lucideCache sync.Map // canonical Lucide name -> immutable *ui.SVG
+//go:embed lucide/icons/*.svg lucide/LICENSE bootstrap-icons/icons/*.svg bootstrap-icons/LICENSE
+var iconSources embed.FS
+
+var iconCache sync.Map // canonical icon name -> immutable *ui.SVG
 
 // Compatibility names used by existing controls, not a second icon family.
 var lucideAliases = map[string]string{
@@ -65,30 +71,37 @@ var lucideAliases = map[string]string{
 	"chev": "chevron-down", "redo": "rotate-cw",
 }
 
-func lucideSVG(name string) *ui.SVG {
+func iconSVG(name string) *ui.SVG {
 	if canonical, ok := lucideAliases[name]; ok {
 		name = canonical
 	}
-	if cached, ok := lucideCache.Load(name); ok {
+	if cached, ok := iconCache.Load(name); ok {
 		return cached.(*ui.SVG)
 	}
-	source, err := lucideSources.ReadFile("lucide/icons/" + name + ".svg")
+	dir := "lucide/icons/"
+	switch name {
+	case IconBrowserChrome, IconBrowserEdge, IconBrowserFirefox:
+		dir = "bootstrap-icons/icons/"
+	}
+	source, err := iconSources.ReadFile(dir + name + ".svg")
 	if err != nil {
-		// A missing semantic match must still use Lucide, never a blank glyph.
+		// Keep a visible fallback for missing glyphs.
 		if name != IconFile {
-			return lucideSVG(IconFile)
+			return iconSVG(IconFile)
 		}
 		panic(err) // Required embedded fallback is a source packaging error.
 	}
-	stroke := []byte(`stroke-width="` + strconv.FormatFloat(float64(StrokeIcon), 'f', -1, 32) + `"`)
-	source = bytes.ReplaceAll(source, []byte(`stroke-width="2"`), stroke)
+	if dir == "lucide/icons/" {
+		stroke := []byte(`stroke-width="` + strconv.FormatFloat(float64(StrokeIcon), 'f', -1, 32) + `"`)
+		source = bytes.ReplaceAll(source, []byte(`stroke-width="2"`), stroke)
+	}
 	icon := ui.MustParseSVG(source)
-	stored, _ := lucideCache.LoadOrStore(name, icon)
+	stored, _ := iconCache.LoadOrStore(name, icon)
 	return stored.(*ui.SVG)
 }
 
 // Icon is the single entry point for application glyphs. Elements remain local
 // to each build; only immutable parsed SVG data is shared between frames.
 func Icon(c *ui.Context, name string, size float32, color ui.Color) ui.Element {
-	return ui.Icon(c, lucideSVG(name)).Size(size, size).TextColor(color)
+	return ui.Icon(c, iconSVG(name)).Size(size, size).TextColor(color)
 }

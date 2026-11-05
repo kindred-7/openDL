@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"openDL/extensionstore"
 	"openDL/style"
 
 	"github.com/egoist/mygo/ui"
@@ -83,9 +84,9 @@ func (pg *mainPage) applicationMenu(c *ui.Context, p *d1Palette) {
 						d1DropdownItem(c, p, "重置面板尺寸", "redo", true).OnClick(func() { pg.showAppMenu = false; pg.resetPanelLayout() })
 					})
 					d1DropdownItem(c, p, "设置", "cog", true).OnClick(func() { pg.showAppMenu = false; pg.openSettings() })
-					d1DropdownItem(c, p, "浏览器扩展安装说明", "globe", true).OnClick(func() {
+					d1DropdownItem(c, p, "安装浏览器扩展", "globe", true).OnClick(func() {
 						pg.showAppMenu = false
-						pg.showExtensionGuide = true
+						pg.openExternalLink(extensionstore.DefaultURL())
 					})
 					d1DropdownItem(c, p, "导入设置", "upload", true).OnClick(func() { pg.showAppMenu = false; pg.importSettings() })
 					d1DropdownItem(c, p, "导出设置", "download", true).OnClick(func() { pg.showAppMenu = false; pg.exportSettings() })

@@ -114,7 +114,7 @@ func (p *d1Palette) progressFill(status string) ui.Color {
 	return p.pri
 }
 
-// 界面操作图标共用 style.Icon 的 Lucide 资源与描边令牌。
+// 界面图标共用 style.Icon 的资源与尺寸。
 func d1Icon(c *ui.Context, name string, size float32, col ui.Color) ui.Element {
 	return style.Icon(c, name, size, col)
 }
@@ -172,7 +172,6 @@ type mainPage struct {
 	showColumns, showAbout              bool
 	copyFeedbackKey                     string
 	copyFeedbackUntil                   time.Time
-	showExtensionGuide                  bool
 	showShortcuts                       bool
 	showDelete, deleteFiles, deleteBusy bool
 	deleteRows                          []d1Row
@@ -574,7 +573,7 @@ func (pg *mainPage) view(c *ui.Context) {
 	c.SetTheme(theme)
 	root.Background(p.bg)
 
-	if !pg.showDelete && !pg.deleteBusy && !pg.showAdd && !pg.showSource && !pg.showSched && !pg.showAbout && !pg.showExtensionGuide && !pg.showShortcuts && !pg.showDirHistory && !pg.showColumns && !pg.showMenu && !pg.showAppMenu && !pg.showTypeMenu && !pg.showLimitMenu && !pg.showLimit {
+	if !pg.showDelete && !pg.deleteBusy && !pg.showAdd && !pg.showSource && !pg.showSched && !pg.showAbout && !pg.showShortcuts && !pg.showDirHistory && !pg.showColumns && !pg.showMenu && !pg.showAppMenu && !pg.showTypeMenu && !pg.showLimitMenu && !pg.showLimit {
 		if pg.shortcutPressed(c, "search") {
 			pg.focus = "d1search"
 		}
@@ -634,9 +633,6 @@ func (pg *mainPage) view(c *ui.Context) {
 	}
 	if pg.showAbout {
 		pg.aboutDialog(c, p)
-	}
-	if pg.showExtensionGuide {
-		pg.extensionGuideDialog(c, p)
 	}
 	if pg.showDelete {
 		pg.deleteDialog(c, p)
@@ -780,29 +776,26 @@ func (pg *mainPage) toolbar(c *ui.Context, p *d1Palette) {
 // ── 通用控件 ────────────────────────────────────────────────────────────
 
 func d1Button(c *ui.Context, p *d1Palette, label, icon string, enabled ...bool) ui.Element {
-	return d1ButtonIcon(c, p, label, icon, p.fg, enabled...)
-}
-
-// d1ButtonIcon 是普通描边按钮：28px 高、RadiusSM、描边、悬停底色过渡。
-// enabled 为假时内容弱化并禁用交互。
-func d1ButtonIcon(c *ui.Context, p *d1Palette, label, icon string, iconCol ui.Color, enabled ...bool) ui.Element {
 	c.Key(label)
-	ok := len(enabled) == 0 || enabled[0]
-	e := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd).Center().Cursor(ui.CursorPointer).Disabled(!ok)
-	col, textCol := iconCol, p.fg
-	if !ok {
-		col, textCol = p.mu, p.mu
-	}
-	hoverMotion(e, p.bg, p.hover)
-	e.Children(func() {
+	button, col := d1ButtonFrame(c, p, len(enabled) == 0 || enabled[0])
+	return button.Padding(0, 10).Children(func() {
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 			if icon != "" {
-				d1Icon(c, icon, 16, col)
+				d1Icon(c, icon, style.SizeIcon, col)
 			}
-			ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(textCol)
+			ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(col)
 		})
 	})
-	return e
+}
+
+func d1ButtonFrame(c *ui.Context, p *d1Palette, enabled bool) (ui.Element, ui.Color) {
+	button := ui.ButtonBase(c).Height(style.HeightButton).Radius(style.RadiusSM).Border(1, p.bd).
+		Center().Cursor(ui.CursorPointer).Disabled(!enabled)
+	hoverMotion(button, p.bg, p.hover)
+	if !enabled {
+		return button, p.mu
+	}
+	return button, p.fg
 }
 
 // 切换主题按钮：图标表达目标状态，当前浅色时显示“moon”（点击变深），

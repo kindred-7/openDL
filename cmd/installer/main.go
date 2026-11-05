@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 
+	"openDL/extensionstore"
 	"openDL/installerconfig"
 	"openDL/resources"
 	"openDL/style"
@@ -235,6 +236,9 @@ func (s *installer) doneView(c *ui.Context, p *style.Palette) {
 			ui.Image(c, s.icon).Size(64, 64)
 		}
 		ui.Text(c, "安装完成").FontSize(23).FontWeight(style.WeightMedium).TextColor(p.Text)
+		if s.message != "" {
+			ui.Text(c, s.message).Role(ui.RoleStatus).FontSize(style.TextSM).TextColor(p.TextSoft)
+		}
 	})
 	ui.Row(c).FillWidth().Gap(12).Children(func() {
 		ui.Button(c, "完成").Grow(1).Basis(0).Height(44).OnClick(func() { s.win.Close() })
@@ -263,6 +267,9 @@ func (s *installer) start() {
 	s.stage, s.activity = "准备安装", "准备安装"
 	win, dest, desktop, autostart := s.win, s.directory, s.desktop, s.autostart
 	go func() {
+		_, previousErr := os.Stat(filepath.Join(previousDir(), "OpenDL.exe"))
+		_, targetErr := os.Stat(filepath.Join(dest, "OpenDL.exe"))
+		freshInstall := errors.Is(previousErr, os.ErrNotExist) && errors.Is(targetErr, os.ErrNotExist)
 		err, details := install(dest, desktop, autostart, func(status installStatus) {
 			win.Update(func() { s.progress, s.stage, s.activity = status.progress, status.stage, status.activity })
 		})
@@ -276,6 +283,12 @@ func (s *installer) start() {
 				return
 			}
 			s.progress, s.page = 1, "done"
+			if freshInstall {
+				if err := mygo.Shell.OpenExternal(extensionstore.DefaultURL()); err != nil {
+					log.Printf("open browser extension store: %v", err)
+					s.message = "无法打开扩展商店，可从 OpenDL 应用菜单重试。"
+				}
+			}
 		})
 	}()
 }
