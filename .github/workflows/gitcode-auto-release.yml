@@ -253,87 +253,72 @@ jobs:
           overwrite: true
           retention-days: 30
 
-  publish-gitcode:
+  publish-gitcode-first:
+    name: GitCode node 1
     needs: release
     if: needs.release.outputs.signed-files == 'success'
-    # Optional label for a runner with PowerShell and a reliable route to GitCode OBS.
-    runs-on: ${{ vars.GITCODE_PUBLISH_RUNNER || 'windows-latest' }}
-    timeout-minutes: 90
-    env:
-      RELEASE_TAG: ${{ needs.release.outputs.tag }}
-      RELEASE_VERSION: ${{ needs.release.outputs.version }}
-    defaults:
-      run:
-        shell: pwsh
+    uses: ./.github/workflows/gitcode-publish-attempt.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
+      node: 1
+      # Keep the existing optional runner setting for the first attempt.
+      runner: ${{ vars.GITCODE_PUBLISH_RUNNER || 'windows-latest' }}
+    secrets:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+
+  publish-gitcode-second:
+    name: GitCode node 2
+    needs: [release, publish-gitcode-first]
+    if: ${{ !cancelled() && needs.release.outputs.signed-files == 'success' && needs.publish-gitcode-first.outputs.result == 'retryable' }}
+    uses: ./.github/workflows/gitcode-publish-attempt.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
+      node: 2
+      runner: windows-latest
+    secrets:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+
+  publish-gitcode-third:
+    name: GitCode node 3 (final)
+    needs: [release, publish-gitcode-second]
+    if: ${{ !cancelled() && needs.release.outputs.signed-files == 'success' && needs.publish-gitcode-second.outputs.result == 'retryable' }}
+    uses: ./.github/workflows/gitcode-publish-attempt.yml
+    with:
+      tag: ${{ needs.release.outputs.tag }}
+      version: ${{ needs.release.outputs.version }}
+      node: 3
+      runner: windows-latest
+      # A slow but healthy final connection may use the full upload budget.
+      failover-on-slow-upload: false
+    secrets:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+
+  publish-gitcode:
+    name: GitCode publication result
+    needs: [release, publish-gitcode-first, publish-gitcode-second, publish-gitcode-third]
+    if: ${{ !cancelled() && needs.release.outputs.signed-files == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Prepare publisher workspace
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
-          Set-Location -LiteralPath $workspace
-          foreach ($name in @('source', 'release-control')) {
-            $path = Join-Path $workspace $name
-            if (Test-Path -LiteralPath $path) {
-              $item = Get-Item -LiteralPath $path -Force
-              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing to clean linked publisher directory: $name" }
-              Remove-Item -LiteralPath $path -Recurse -Force
-            }
-          }
-
-      - name: Fetch tagged publisher source
-        run: |
-          $ErrorActionPreference = 'Stop'
-          git clone https://gitcode.com/kindred-wu/openDL.git source
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to clone GitCode source.' }
-          Set-Location source
-          git checkout --detach "refs/tags/$env:RELEASE_TAG"
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to check out the release tag.' }
-          git merge-base --is-ancestor HEAD origin/main
-          if ($LASTEXITCODE -ne 0) { throw 'The release tag is not on GitCode main.' }
-          $version = [string](Get-Content mygo.json -Raw | ConvertFrom-Json).version
-          if ($version -cne $env:RELEASE_VERSION) { throw 'The tag and source versions differ.' }
-
-      - name: Download saved signed files
-        uses: actions/download-artifact@v4
-        with:
-          name: OpenDL-release-${{ needs.release.outputs.version }}
-          path: source/build/windows-amd64
-
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: source/go.mod
-          cache: false
-
-      - name: Load publisher for manual recovery
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.sha }}
-          path: release-control
-          persist-credentials: false
-
-      - name: Use current publisher for manual recovery
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          Copy-Item -LiteralPath 'release-control/scripts/publish-gitcode-release.ps1' -Destination 'source/scripts/publish-gitcode-release.ps1' -Force
-
-      - name: Publish on GitCode
-        working-directory: source
+      - name: Report final publication result
+        shell: pwsh
         env:
-          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
-          UPLOAD_TIMEOUT_SEC: ${{ vars.GITCODE_UPLOAD_TIMEOUT_SEC || '2400' }}
+          FIRST_RESULT: ${{ needs.publish-gitcode-first.outputs.result }}
+          SECOND_RESULT: ${{ needs.publish-gitcode-second.outputs.result }}
+          THIRD_RESULT: ${{ needs.publish-gitcode-third.outputs.result }}
         run: |
-          $ErrorActionPreference = 'Stop'
-          if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
-          $candidates = @("OpenDL Setup $env:RELEASE_VERSION amd64.exe", "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe")
-          $found = @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path 'build/windows-amd64' $_) })
-          if ($found.Count -ne 1) { throw 'Saved files must include exactly one recognized installer.' }
-          $envelope = Get-Content 'build/windows-amd64/releases.json' -Raw | ConvertFrom-Json
-          $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
-          $notes = Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md"
-          [IO.File]::WriteAllText($notes, [string]$manifest.notes, [Text.UTF8Encoding]::new($false))
-          ./scripts/publish-gitcode-release.ps1 -Installer (Join-Path 'build/windows-amd64' $found[0]) -Manifest 'build/windows-amd64/releases.json' -NotesFile $notes -Tag $env:RELEASE_TAG -UploadAttempts 2 -UploadTimeoutSec ([int]$env:UPLOAD_TIMEOUT_SEC)
+          $results = @($env:FIRST_RESULT, $env:SECOND_RESULT, $env:THIRD_RESULT)
+          for ($index = 0; $index -lt $results.Count; $index++) {
+            $value = if ($results[$index]) { $results[$index] } else { 'not-run-or-setup-failed' }
+            "Node $($index + 1): $value" >> $env:GITHUB_STEP_SUMMARY
+          }
+          if ($results -contains 'success') {
+            Write-Host 'GitCode publication completed. No further upload nodes are needed.'
+          } else {
+            throw 'GitCode publication did not complete. Review the node summaries; rerun with the saved signed artifacts, without rebuilding.'
+          }
 
   sync-github:
     needs: release

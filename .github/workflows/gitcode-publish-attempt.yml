@@ -1,0 +1,160 @@
+name: GitCode upload node
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      node:
+        required: true
+        type: number
+      runner:
+        type: string
+        default: windows-latest
+      failover-on-slow-upload:
+        type: boolean
+        default: true
+    secrets:
+      GITCODE_TOKEN:
+        required: true
+    outputs:
+      result:
+        description: 'success, retryable, or fatal; setup failures are fatal'
+        value: ${{ jobs.upload.outputs.result }}
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  upload:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 90
+    outputs:
+      result: ${{ steps.publish.outputs.result || 'fatal' }}
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      RELEASE_VERSION: ${{ inputs.version }}
+      UPLOAD_NODE: ${{ inputs.node }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Prepare publisher workspace
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:RELEASE_VERSION -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$' -or ($env:RELEASE_TAG -cne $env:RELEASE_VERSION -and $env:RELEASE_TAG -cne "v$env:RELEASE_VERSION")) { throw 'Invalid release tag.' }
+          Write-Host "GitCode upload node $env:UPLOAD_NODE; runner=$env:RUNNER_NAME; image=$env:ImageOS."
+          $workspace = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          Set-Location -LiteralPath $workspace
+          foreach ($name in @('source', 'release-control')) {
+            $path = [IO.Path]::GetFullPath((Join-Path $workspace $name))
+            if ([IO.Path]::GetDirectoryName($path) -cne $workspace.TrimEnd([IO.Path]::DirectorySeparatorChar)) { throw 'Publisher cleanup target is outside the workspace.' }
+            if (Test-Path -LiteralPath $path) {
+              $item = Get-Item -LiteralPath $path -Force
+              if ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw "Refusing to clean linked publisher directory: $name" }
+              Remove-Item -LiteralPath $path -Recurse -Force
+            }
+          }
+
+      - name: Fetch tagged publisher source
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git clone https://gitcode.com/kindred-wu/openDL.git source
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to clone GitCode source.' }
+          Set-Location source
+          git checkout --detach "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to check out the release tag.' }
+          git merge-base --is-ancestor HEAD origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'The release tag is not on GitCode main.' }
+          $version = [string](Get-Content mygo.json -Raw | ConvertFrom-Json).version
+          if ($version -cne $env:RELEASE_VERSION) { throw 'The tag and source versions differ.' }
+
+      - name: Download saved signed files
+        uses: actions/download-artifact@v4
+        with:
+          name: OpenDL-release-${{ inputs.version }}
+          path: source/build/windows-amd64
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: source/go.mod
+          cache: false
+
+      # Use the controller from this workflow revision, also when recovering
+      # an older tag. The tagged verifier and signed artifacts remain intact.
+      - name: Load publisher controller
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: release-control
+          persist-credentials: false
+
+      - name: Use workflow publisher controller
+        run: |
+          Copy-Item -LiteralPath 'release-control/scripts/publish-gitcode-release.ps1' -Destination 'source/scripts/publish-gitcode-release.ps1' -Force
+
+      - name: Publish on GitCode
+        id: publish
+        working-directory: source
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          UPLOAD_TIMEOUT_SEC: ${{ vars.GITCODE_UPLOAD_TIMEOUT_SEC || '2400' }}
+          SLOW_UPLOAD_BYTES_PER_SEC: ${{ vars.GITCODE_SLOW_UPLOAD_BYTES_PER_SEC || '131072' }}
+          FAILOVER_ON_SLOW_UPLOAD: ${{ inputs.failover-on-slow-upload }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $result = 'fatal'
+          $reason = 'configuration-or-integrity'
+          try {
+            if (-not $env:GITCODE_TOKEN) { throw 'Missing GitCode token secret.' }
+            $candidates = @("OpenDL Setup $env:RELEASE_VERSION amd64.exe", "OpenDL.Setup.$env:RELEASE_VERSION.amd64.exe")
+            $found = @($candidates | Where-Object { Test-Path -LiteralPath (Join-Path 'build/windows-amd64' $_) })
+            if ($found.Count -ne 1) { throw 'Saved files must include exactly one recognized installer.' }
+            $envelope = Get-Content 'build/windows-amd64/releases.json' -Raw | ConvertFrom-Json
+            $manifest = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($envelope.payload)) | ConvertFrom-Json
+            $notes = Join-Path $env:RUNNER_TEMP "opendl-release-notes-$env:RELEASE_VERSION.md"
+            [IO.File]::WriteAllText($notes, [string]$manifest.notes, [Text.UTF8Encoding]::new($false))
+            $options = @{
+              Installer = (Join-Path 'build/windows-amd64' $found[0])
+              Manifest = 'build/windows-amd64/releases.json'
+              NotesFile = $notes
+              Tag = $env:RELEASE_TAG
+              UploadAttempts = 1
+              UploadTimeoutSec = [int]$env:UPLOAD_TIMEOUT_SEC
+              FailoverOnSlowUpload = ($env:FAILOVER_ON_SLOW_UPLOAD -eq 'true')
+              SlowUploadBytesPerSec = [int]$env:SLOW_UPLOAD_BYTES_PER_SEC
+            }
+            ./scripts/publish-gitcode-release.ps1 @options
+            $result = 'success'
+            $reason = 'published'
+          } catch {
+            # Never relay raw exception text: a network error may contain a
+            # signed URL. Only the publisher's explicit marker permits failover.
+            $failure = $_.Exception
+            while ($null -ne $failure) {
+              if ($failure.Data['GitCodeRetryable'] -eq $true) {
+                $result = 'retryable'
+                $reason = [string]$failure.Data['GitCodeFailureReason']
+                break
+              }
+              if ($failure -is [UnauthorizedAccessException]) { $reason = 'authentication-or-access' }
+              elseif ($failure -is [IO.InvalidDataException]) { $reason = 'rejected-or-conflicting-asset' }
+              elseif ($failure -is [System.Management.Automation.ParameterBindingException]) { $reason = 'invalid-publish-settings' }
+              $failure = $failure.InnerException
+            }
+            if ($reason -notin @('network', 'slow-upload', 'configuration-or-integrity', 'authentication-or-access', 'rejected-or-conflicting-asset', 'invalid-publish-settings')) { $reason = 'configuration-or-integrity' }
+            Write-Warning "GitCode node $env:UPLOAD_NODE stopped: $reason (exception=$($_.Exception.GetType().Name))."
+          } finally {
+            "result=$result" >> $env:GITHUB_OUTPUT
+            "### GitCode upload node $env:UPLOAD_NODE" >> $env:GITHUB_STEP_SUMMARY
+            "Result: $result ($reason). Existing verified assets are retained." >> $env:GITHUB_STEP_SUMMARY
+          }
+          # Expected upload failures are data for the orchestrator; its final
+          # job fails the workflow only if no node completes publication.
+          $global:LASTEXITCODE = 0

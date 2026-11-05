@@ -4,10 +4,28 @@ param(
     [Parameter(Mandatory = $true)][string]$NotesFile,
     [string]$Tag = '',
     [ValidateRange(1, 5)][int]$UploadAttempts = 2,
-    [ValidateRange(120, 2400)][int]$UploadTimeoutSec = 2400
+    [ValidateRange(120, 3600)][int]$UploadTimeoutSec = 2400,
+    [switch]$FailoverOnSlowUpload,
+    [ValidateRange(1024, 10485760)][int]$SlowUploadBytesPerSec = 131072
 )
 
 $ErrorActionPreference = 'Stop'
+function New-RetryablePublishException([string]$Message, [string]$Reason = 'network') {
+    $failureException = [IO.IOException]::new($Message)
+    $failureException.Data['GitCodeRetryable'] = $true
+    $failureException.Data['GitCodeFailureReason'] = $Reason
+    return $failureException
+}
+function New-GitCodeRequestException($Failure, [string]$Description) {
+    $status = [int]$Failure.Exception.Response.StatusCode
+    if ($status -in @(401, 403)) {
+        return [UnauthorizedAccessException]::new("$Description failed (HTTP $status). Check the GitCode token permissions.")
+    }
+    if ($status -ge 400 -and $status -lt 500 -and $status -notin @(408, 409, 425, 429)) {
+        return [IO.InvalidDataException]::new("$Description failed (HTTP $status); not retrying.")
+    }
+    return (New-RetryablePublishException "$Description failed (HTTP $status).")
+}
 $root = Split-Path -Parent $PSScriptRoot
 $installerPath = (Resolve-Path -LiteralPath $Installer).Path
 $manifestPath = (Resolve-Path -LiteralPath $Manifest).Path
@@ -67,8 +85,8 @@ function Get-GitCodeResource([string]$Uri, [string]$Description, [switch]$AllowM
             $status = [int]$_.Exception.Response.StatusCode
             if ($status -eq 404 -and $AllowMissing) { return $null }
             if ($status -in @(401, 403)) { throw [UnauthorizedAccessException]::new("$Description failed (HTTP $status). Check the GitCode token permissions.") }
-            if (($status -ge 400 -and $status -lt 500 -and $status -notin @(408, 425, 429)) -or $attempt -eq 3) {
-                throw "$Description failed (HTTP $status) after $attempt attempt(s)."
+            if (($status -ge 400 -and $status -lt 500 -and $status -notin @(408, 409, 425, 429)) -or $attempt -eq 3) {
+                throw (New-GitCodeRequestException $_ $Description)
             }
             $delay = 10 * $attempt
             $retryAfter = $_.Exception.Response.Headers.RetryAfter
@@ -95,6 +113,13 @@ function Read-CurlProgress([hashtable]$State, [char[]]$Buffer, [int]$Count) {
         # contain signed URLs or authorization headers and must never be logged.
         if ($lines[$i] -match '^\s*\d{1,3}\s+[0-9.]+[kKMGTPE]?\s+\d{1,3}\s+[0-9.]+[kKMGTPE]?\s+\d{1,3}\s+[0-9.]+[kKMGTPE]?\s+[0-9.]+[kKMGTPE]?\s+[0-9.]+[kKMGTPE]?\s+[0-9:-]+\s+[0-9:-]+\s+[0-9:-]+\s+[0-9.]+[kKMGTPE]?\s*$') {
             $State.Row = $lines[$i].Trim()
+            $columns = $State.Row -split '\s+'
+            $amount = [regex]::Match($columns[5], '^([0-9.]+)([kKMGTPE]?)$')
+            $number = [double]::Parse($amount.Groups[1].Value, [Globalization.CultureInfo]::InvariantCulture)
+            $unit = $amount.Groups[2].Value.ToUpperInvariant()
+            $power = if ($unit) { 'KMGTPE'.IndexOf($unit) + 1 } else { 0 }
+            $State.Uploaded = $number * [math]::Pow(1024, $power)
+            $State.Sequence++
         }
     }
     if ($State.Tail.Length -gt 4096) { $State.Tail = '' }
@@ -140,10 +165,19 @@ function Send-ReleaseFile($Upload, [string]$Path) {
         [void]$process.Start()
         $started = $true
         $output = $process.StandardOutput.ReadToEndAsync()
-        $progress = @{ Tail = ''; Row = '' }
+        $progress = @{ Tail = ''; Row = ''; Uploaded = 0.0; Sequence = 0 }
         $errorBuffer = [char[]]::new(4096)
         $errorRead = $process.StandardError.ReadAsync($errorBuffer, 0, $errorBuffer.Length)
         $nextProgress = 15
+        $nextSample = 30
+        $sampleTime = 0.0
+        $sampleBytes = 0.0
+        $sampleSequence = 0
+        $slowWindows = 0
+        $slowRoute = $false
+        if ($FailoverOnSlowUpload -and $size -gt 1MB) {
+            Write-Host "Node failover enabled: evaluate 30s windows after 90s; three slow windows below $SlowUploadBytesPerSec bytes/s trigger a fresh runner."
+        }
         $process.StandardInput.WriteLine(($config -join "`n"))
         $process.StandardInput.Close()
         while ($true) {
@@ -161,10 +195,33 @@ function Send-ReleaseFile($Upload, [string]$Path) {
                 Write-Host ("Upload elapsed={0:N0}s; progress={1}" -f $clock.Elapsed.TotalSeconds, $row)
                 $nextProgress = $clock.Elapsed.TotalSeconds + 15
             }
+            $elapsed = $clock.Elapsed.TotalSeconds
+            if ($FailoverOnSlowUpload -and $size -gt 1MB -and $elapsed -ge $nextSample) {
+                # The meter is rounded, so use long windows and require fresh
+                # samples. Never abandon an upload near completion or with a
+                # short remaining duration just to chase a faster connection.
+                $uploaded = [math]::Min($size, $progress.Uploaded)
+                $rate = [math]::Max(0, $uploaded - $sampleBytes) / ($elapsed - $sampleTime)
+                $remaining = $size - $uploaded
+                $fresh = $progress.Sequence -gt $sampleSequence
+                $slow = $fresh -and $sampleTime -ge 90 -and $uploaded -lt ($size * 0.9) -and $rate -lt $SlowUploadBytesPerSec -and ($rate -le 0 -or ($remaining / $rate) -gt 120)
+                if ($slow) { $slowWindows++ } else { $slowWindows = 0 }
+                $sampleBytes = $uploaded
+                $sampleTime = $elapsed
+                $sampleSequence = $progress.Sequence
+                $nextSample = $elapsed + 30
+                if ($slowWindows -ge 3) {
+                    Write-Warning ("Sustained slow upload: {0:N0} bytes/s; {1:N1}% uploaded. Handing off to another runner." -f $rate, (100 * $uploaded / $size))
+                    $slowRoute = $true
+                    $process.Kill()
+                    $process.WaitForExit()
+                    break
+                }
+            }
             if ($clock.Elapsed.TotalSeconds -gt $timeout + 30) {
                 $process.Kill()
                 $process.WaitForExit()
-                throw 'Upload transport exceeded its process watchdog.'
+                throw (New-RetryablePublishException 'Upload transport exceeded its process watchdog.')
             }
         }
         while ($null -ne $errorRead) {
@@ -173,14 +230,16 @@ function Send-ReleaseFile($Upload, [string]$Path) {
             Read-CurlProgress $progress $errorBuffer $count
             $errorRead = $process.StandardError.ReadAsync($errorBuffer, 0, $errorBuffer.Length)
         }
-        $stats = $output.GetAwaiter().GetResult().Trim().Split('|')
+        $rawStats = $output.GetAwaiter().GetResult().Trim()
+        if ($slowRoute) { return [pscustomobject]@{ ExitCode = 28; Status = 0; SlowRoute = $true } }
+        $stats = $rawStats.Split('|')
         if ($stats.Count -ne 8 -or ($stats -join '|') -notmatch '^[0-9.|]+$') { throw 'Upload transport returned invalid diagnostics.' }
         Write-Host "Upload result: curl=$($process.ExitCode), HTTP=$($stats[0]), sent=$($stats[1]) bytes, average=$($stats[2]) bytes/s, DNS=$($stats[3])s, TCP=$($stats[4])s, TLS=$($stats[5])s, first response=$($stats[6])s, total=$($stats[7])s."
         if ($process.ExitCode -eq 28 -and [double]$stats[1] -gt 0 -and [double]$stats[1] -lt $size -and [double]$stats[2] -gt 0) {
             $estimate = [math]::Ceiling($size / [double]$stats[2])
             Write-Warning "Data was still uploading when the time budget expired; estimated whole-file duration at the observed average is ${estimate}s. Use a faster upload runner or increase the bounded upload budget."
         }
-        return [pscustomobject]@{ ExitCode = $process.ExitCode; Status = [int]$stats[0] }
+        return [pscustomobject]@{ ExitCode = $process.ExitCode; Status = [int]$stats[0]; SlowRoute = $false }
     } finally {
         if ($started -and -not $process.HasExited) { $process.Kill(); $process.WaitForExit() }
         $process.Dispose()
@@ -204,7 +263,7 @@ function Test-ReleaseFile([string]$Path) {
     try {
         $encoded = [Uri]::EscapeDataString($name)
         try { Invoke-WebRequest -Uri "${releasePath}/attach_files/${encoded}/download?$query" -OutFile $temp -TimeoutSec 180 | Out-Null }
-        catch { throw "Failed to read existing GitCode asset: $name" }
+        catch { throw (New-GitCodeRequestException $_ "Reading existing GitCode asset: $name") }
         if ((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash -cne $localHash) {
             throw [IO.InvalidDataException]::new("Existing GitCode asset differs: $name. It will not be replaced.")
         }
@@ -219,16 +278,17 @@ try {
         # GitCode 会在推送标签时自动生成仅有源码包的预发布：接管它并补全资产。
         $update = @{ name = "OpenDL $version"; body = $notes } | ConvertTo-Json -Compress
         try { Invoke-RestMethod -Method Patch -Uri "${releasePath}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($update)) -TimeoutSec 60 | Out-Null }
-        catch { throw 'Failed to update the existing prerelease. Check the token permissions.' }
+        catch { throw (New-GitCodeRequestException $_ 'Updating the existing prerelease') }
     } else {
         try { Invoke-RestMethod -Method Post -Uri "${api}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 60 | Out-Null }
-        catch { throw 'Failed to create the prerelease. Check the token permissions and whether this release already exists.' }
+        catch { throw (New-GitCodeRequestException $_ 'Creating the prerelease') }
     }
     $created = $true
     foreach ($path in @($installerPath, $manifestPath)) {
         $name = [IO.Path]::GetFileName($path)
         $nameEncoded = [Uri]::EscapeDataString($name)
         $complete = $false
+        $lastUploadFailure = $null
         for ($attempt = 1; $attempt -le $UploadAttempts; $attempt++) {
             Write-Host "Uploading $name ($((Get-Item -LiteralPath $path).Length) bytes), attempt $attempt/$UploadAttempts..."
             try {
@@ -236,6 +296,9 @@ try {
                 if (Test-ReleaseFile $path) { $complete = $true; break }
                 $upload = Get-GitCodeResource "${releasePath}/upload_url?${query}&file_name=$nameEncoded" "Obtaining a fresh upload URL for $name"
                 $result = Send-ReleaseFile $upload $path
+                if ($result.SlowRoute) {
+                    throw (New-RetryablePublishException "Sustained slow upload for $name; use a fresh runner." 'slow-upload')
+                }
                 if ($result.ExitCode -eq 0 -and $result.Status -ge 200 -and $result.Status -lt 300) {
                     # Allow asset registration to become visible before a retry.
                     for ($poll = 0; $poll -lt 3; $poll++) {
@@ -247,30 +310,36 @@ try {
                 if ($result.Status -ge 400 -and $result.Status -lt 500 -and $result.Status -notin @(401, 403, 408, 409, 425, 429)) {
                     throw [IO.InvalidDataException]::new("Upload rejected for $name (HTTP $($result.Status)); not retrying.")
                 }
-                throw "Upload did not complete for $name (curl=$($result.ExitCode), HTTP=$($result.Status))."
+                $message = "Upload did not complete for $name (curl=$($result.ExitCode), HTTP=$($result.Status))."
+                if ($result.Status -in @(401, 403, 408, 409, 425, 429) -or $result.Status -ge 500 -or $result.ExitCode -in @(5, 6, 7, 16, 18, 28, 35, 52, 55, 56, 92, 95, 97) -or ($result.ExitCode -eq 0 -and $result.Status -ge 200 -and $result.Status -lt 300)) {
+                    throw (New-RetryablePublishException $message)
+                }
+                throw [IO.InvalidDataException]::new($message)
             } catch {
-                if ($_.Exception -is [IO.InvalidDataException] -or $_.Exception -is [UnauthorizedAccessException]) { throw }
+                if ($_.Exception.Data['GitCodeRetryable'] -ne $true) { throw }
+                $lastUploadFailure = $_.Exception
                 Write-Warning $_.Exception.Message
+                if ($_.Exception.Data['GitCodeFailureReason'] -eq 'slow-upload') { break }
                 if ($attempt -lt $UploadAttempts) { Start-Sleep -Seconds (5 * [math]::Pow(2, $attempt - 1)) }
             }
         }
         # A final check avoids declaring failure when the last response was lost.
         if (-not $complete) { $complete = Test-ReleaseFile $path }
-        if (-not $complete) { throw "Failed to upload $name after $UploadAttempts attempts. Rerun the GitCode publish job to reuse the saved signed files." }
+        if (-not $complete) { throw $lastUploadFailure }
     }
     $release = Get-GitCodeResource "${api}/tags/${tagEncoded}?$query" 'Reading uploaded release assets'
     $names = @($release.assets | ForEach-Object { $_.name })
-    if ($names -cnotcontains $fileName -or $names -cnotcontains 'releases.json') { throw 'The release does not list both uploaded files.' }
+    if ($names -cnotcontains $fileName -or $names -cnotcontains 'releases.json') { throw (New-RetryablePublishException 'The release does not list both uploaded files yet.') }
     Write-Host 'Marking the release as latest...'
     $body = @{ name = "OpenDL $version"; body = $notes; release_status = 'latest' } | ConvertTo-Json -Compress
     try { Invoke-RestMethod -Method Patch -Uri "${releasePath}?$query" -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 60 | Out-Null }
-    catch { throw 'Files were uploaded, but marking the release as latest failed.' }
+    catch { throw (New-GitCodeRequestException $_ 'Marking the release as latest') }
     $published = Get-GitCodeResource "${api}/tags/${tagEncoded}?$query" 'Confirming final GitCode publication'
-    if ($published.release_status -eq 'pre' -or $published.prerelease -eq $true) { throw 'Assets were retained, but GitCode still reports a prerelease. Retry publication without rebuilding.' }
+    if ($published.release_status -eq 'pre' -or $published.prerelease -eq $true) { throw (New-RetryablePublishException 'Assets were retained, but GitCode still reports a prerelease. Retry publication without rebuilding.') }
     Write-Host "Published OpenDL ${version}: https://gitcode.com/kindred-wu/openDL/releases"
 } catch {
     if ($created) { Write-Warning "Release $Tag and its uploaded assets were retained. A retry verifies existing files and uploads only missing files." }
-    throw $_.Exception.Message
+    throw
 } finally {
     $token = $null
     $tokenEncoded = $null
