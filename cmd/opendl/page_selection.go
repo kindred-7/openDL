@@ -61,7 +61,7 @@ func (pg *mainPage) d1SelectionHeader(c *ui.Context, p *d1Palette, rows []d1Row,
 		if canFinishLive {
 			d1SelectionAction(c, p, "结束录制并保存", "stop", p.mu, true).Size(buttonSize, buttonSize).OnClick(func() {
 				if pg.mgr != nil && pg.mgr.FinishLive(selected[0].id) {
-					pg.flash(tr("正在结束录制并保存"))
+					pg.flash("正在结束录制并保存")
 				}
 			})
 		}

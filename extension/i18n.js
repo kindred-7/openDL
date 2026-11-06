@@ -1,6 +1,7 @@
 // Source messages identify presentation text only. Browser locale selects the catalog.
 (() => {
   const ids = {
+  "版本：%s": "m_extension_version",
   "搜索资源名称或链接": "m_search_resources",
   "没有匹配的资源": "m_no_matching_resources",
   "自定义嗅探格式": "m_sniff_formats",

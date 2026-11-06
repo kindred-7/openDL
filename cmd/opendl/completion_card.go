@@ -56,8 +56,12 @@ func (pg *mainPage) showNextCompletionCard() {
 	const cardWidth, cardHeight, inset = 380, 160, 16
 	area := mygo.Screen.PrimaryDisplay().WorkArea
 	width, height := cardWidth, cardHeight
-	if area.Width > 0 { width = min(width, max(1, area.Width-2*inset)) }
-	if area.Height > 0 { height = min(height, max(1, area.Height-2*inset)) }
+	if area.Width > 0 {
+		width = min(width, max(1, area.Width-2*inset))
+	}
+	if area.Height > 0 {
+		height = min(height, max(1, area.Height-2*inset))
+	}
 	x, y := area.X+area.Width-width-inset, area.Y+area.Height-height-inset
 	var win *mygo.Window
 	view := func(c *ui.Context) {
@@ -122,9 +126,8 @@ func (pg *mainPage) completionDeleteMenu(c *ui.Context, p *d1Palette, anchor ui.
 		pg.completionMenuOpen = true
 	}
 	panel := ui.PopoverBase(c, anchor, &pg.completionMenuOpen, func(tip ui.Element) {
-		tip.AttachTo(anchor, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 4, 0).
-			Width(180).Padding(4).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).
-			Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, .2)).Children(func() {
+		style.ShadowOverlay(tip.AttachTo(anchor, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 4, 0).
+			Width(180).Padding(4).Radius(style.RadiusMD).Border(1, p.bd).Background(p.card)).Children(func() {
 			ui.Column(c).Gap(2).Children(func() {
 				pg.d1MenuIconItem(c, p, "trash", "删除任务", p.fg, func() {
 					pg.completionMenuOpen = false
@@ -173,11 +176,11 @@ func (pg *mainPage) deleteCompletionTask(item completionCardItem, withFiles bool
 		}
 	}
 	if !withFiles {
-		pg.flash(tr("已删除任务，文件保留在磁盘"))
+		pg.flash("已删除任务，文件保留在磁盘")
 		return
 	}
 	if pg.win == nil {
-		pg.flash(tr("已删除任务") + "；" + tr("无法删除本地文件"))
+		pg.flash("已删除任务；无法删除本地文件")
 		return
 	}
 	win := pg.win
@@ -185,9 +188,9 @@ func (pg *mainPage) deleteCompletionTask(item completionCardItem, withFiles bool
 		err := trashLocalFile(item.path)
 		win.Update(func() {
 			if err != nil {
-				pg.flash(tr("已删除任务") + "；" + tr("文件无法移至回收站"))
+				pg.flash("已删除任务；文件无法移至回收站")
 			} else {
-				pg.flash(tr("已删除任务"))
+				pg.flash("已删除任务")
 			}
 		})
 	}()

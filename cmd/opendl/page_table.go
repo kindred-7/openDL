@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"openDL/download"
+	"openDL/i18n"
 	"openDL/style"
 
 	"github.com/egoist/mygo/transfer"
@@ -26,9 +27,12 @@ type taskDragFrame struct {
 // sortTaskRows shares the displayed order with drag previews and saved manual
 // ordering. Creation timestamps remain full precision across dates and restarts.
 func (pg *mainPage) sortTaskRows(rows []d1Row) {
-	byName := pg.preferences.TaskSortBy == "name"
+	sortKey := pg.preferences.TaskSortBy
+	if sortKey == "" {
+		sortKey = "added"
+	}
 	created := make(map[string]time.Time, len(rows))
-	if !byName {
+	if sortKey == "added" {
 		for _, row := range rows {
 			at := row.snap.Created
 			if row.pending && row.snap.ID == "" {
@@ -37,22 +41,56 @@ func (pg *mainPage) sortTaskRows(rows []d1Row) {
 			created[row.id] = at
 		}
 	}
+	// 排序键：名称、大小、状态、剩余时间按 sortDesc 升降；添加时间固定
+	// 最新在前。
 	sort.SliceStable(rows, func(i, j int) bool {
-		if !byName {
-			a, b := created[rows[i].id], created[rows[j].id]
+		x, y := rows[i], rows[j]
+		tie := func() bool { return x.id < y.id }
+		desc := pg.sortDesc
+		switch sortKey {
+		case "name":
+			a, b := strings.ToLower(x.rowName()), strings.ToLower(y.rowName())
+			if a == b {
+				return tie()
+			}
+			if desc {
+				return a > b
+			}
+			return a < b
+		case "size":
+			a, b := sortRowSize(x), sortRowSize(y)
+			if a == b {
+				return tie()
+			}
+			if desc {
+				return a > b
+			}
+			return a < b
+		case "status":
+			a, b := pg.rowStatus(x), pg.rowStatus(y)
+			if a == b {
+				return tie()
+			}
+			if desc {
+				return a > b
+			}
+			return a < b
+		case "remain":
+			a, b := sortRowRemain(x), sortRowRemain(y)
+			if a == b {
+				return tie()
+			}
+			if desc {
+				return a > b
+			}
+			return a < b
+		default:
+			a, b := created[x.id], created[y.id]
 			if a.Equal(b) {
-				return rows[i].id < rows[j].id
+				return tie()
 			}
 			return a.After(b)
 		}
-		a, b := strings.ToLower(rows[i].rowName()), strings.ToLower(rows[j].rowName())
-		if a == b {
-			return rows[i].id < rows[j].id
-		}
-		if pg.sortDesc {
-			return a > b
-		}
-		return a < b
 	})
 	order := pg.preferences.ManualTaskOrder
 	if len(pg.taskDragPreview) > 0 {
@@ -72,6 +110,22 @@ func (pg *mainPage) sortTaskRows(rows []d1Row) {
 		}
 		return aok && a < b
 	})
+}
+
+// sortRowSize 是排序用字节数：未知大小退化为已下载字节。
+func sortRowSize(r d1Row) int64 {
+	if r.snap.Total > 0 {
+		return r.snap.Total
+	}
+	return r.snap.Done
+}
+
+// sortRowRemain 是排序用剩余秒数；无法估时排在最后。
+func sortRowRemain(r d1Row) int64 {
+	if r.pending || r.snap.State != download.Running || r.snap.Speed <= 0 || r.snap.Total <= r.snap.Done || r.snap.Total <= 0 {
+		return 1 << 62
+	}
+	return (r.snap.Total - r.snap.Done) / r.snap.Speed
 }
 
 func (pg *mainPage) taskOrder() []string {
@@ -116,16 +170,16 @@ func moveTaskOrder(order []string, source, target string, after bool) []string {
 	return result
 }
 
-func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
+func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows, all []d1Row) {
 	columns := pg.visibleColumns(c)
-	ui.Column(c).Grow(1).Shrink(1).Basis(0).FillWidth().Clip().Role(ui.RoleTable).Label(tr("下载任务")).Bind(&pg.tableHandle).Children(func() {
-		pg.tableHead(c, p, rows, columns)
+	ui.Column(c).Grow(1).Shrink(1).Basis(0).FillWidth().Clip().Role(ui.RoleTable).Label(tr("下载任务")).FocusGroup(ui.Vertical).Bind(&pg.tableHandle).Children(func() {
+		pg.tableHead(c, p, rows, all, columns)
 		if len(rows) == 0 {
 			pg.taskDragID, pg.taskDragName = "", ""
 			pg.taskDragPreview = nil
 			ui.Column(c).Grow(1).Shrink(1).Basis(0).Center().Gap(8).Children(func() {
-				ui.Text(c, tr(pg.emptyTitle())).FontSize(style.TextBase).TextColor(p.fg)
-				ui.Text(c, tr(pg.emptyHint())).FontSize(style.TextSM).TextColor(p.mu)
+				ui.Text(c, tr(pg.emptyTitle(all))).FontSize(style.TextBase).TextColor(p.fg)
+				ui.Text(c, tr(pg.emptyHint(all))).FontSize(style.TextSM).TextColor(p.mu)
 				d1Button(c, p, "添加 URL", "plus").OnClick(func() { pg.openAdd(false) })
 			})
 			return
@@ -134,14 +188,17 @@ func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
 		// handles them, so blank space clears the existing selection.
 		c.Key("task-table-scroll")
 		drag := taskDragFrame{}
-		scroll := ui.Scroll(c).Grow(1).Shrink(1).Basis(0).FillWidth().TrackScroll(&pg.taskScroll).OnClick(pg.clearTableSelection)
-		_, pointerY, overScroll := scroll.PointerPosition()
+		// 虚拟列表只构建可见行；ItemKey 与行内 c.Key(r.id) 同源，行状态
+		// 随任务 id 移动，列宽与行内动画语义不变。
+		list := ui.List(c, &pg.taskList, len(rows)).ItemKey(func(i int) any { return rows[i].id })
+		list.Grow(1).Shrink(1).Basis(0).FillWidth().FocusGroup(ui.Vertical).TrackScroll(&pg.taskScroll).OnClick(pg.clearTableSelection)
+		_, pointerY, overScroll := list.PointerPosition()
 		// MyGo scrolls value drags near the edge itself. Register the scroll
 		// surface as a fallback target for the space after the final row.
-		if value, over := ui.DragOver[taskDrag](scroll); over {
+		if value, over := ui.DragOver[taskDrag](list); over {
 			drag.source, drag.target, drag.after, drag.over = value.id, rows[len(rows)-1].id, true, true
 		}
-		if value, dropped := ui.Drop[taskDrag](scroll); dropped {
+		if value, dropped := ui.Drop[taskDrag](list); dropped {
 			drag.source, drag.target, drag.after, drag.dropped = value.id, rows[len(rows)-1].id, true, true
 		}
 		if pg.taskDragID != "" && overScroll {
@@ -162,10 +219,10 @@ func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
 				knownProgress := current.snap.Total > 0 || (!current.pending && current.snap.State == download.Done)
 				statusColor, _ := p.badgeColors(statusKey)
 				progressColor := p.progressFill(statusKey)
-				scroll.DrawOver(func(painter *ui.Painter, r ui.Rect) {
+				list.DrawOver(func(painter *ui.Painter, r ui.Rect) {
 					y := max(r.Y, min(r.Y+r.H-style.HeightRow, r.Y+pointerY-style.HeightRow/2))
 					ghost := ui.Rect{X: r.X + 8, Y: y, W: max(float32(0), r.W-16), H: style.HeightRow - 2}
-					painter.Shadow(ghost, 8, 0, 3, 10, 0, ui.RGBA(0, 0, 0, .12))
+					painter.Shadow(ghost, style.ShadowOverlayRadius, style.ShadowOverlayX, style.ShadowOverlayY, style.ShadowOverlayBlur, style.ShadowOverlaySpread, style.ShadowOverlayColor)
 					painter.Fill(ghost, p.bg, 8)
 					painter.Stroke(ghost, p.bd2, 8, 1)
 					x := ghost.X + style.TaskTable.PadX
@@ -217,10 +274,8 @@ func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
 				break
 			}
 		}
-		scroll.Children(func() {
-			for _, r := range rows {
-				pg.tableRow(c, p, r, columns, &drag, overScroll)
-			}
+		list.Rows(func(row ui.ListRow) {
+			pg.tableRow(row.Context, p, rows[row.Index], columns, &drag, overScroll, row)
 		})
 		// Animated rows may temporarily overlap or leave gaps. Resolve the
 		// insertion slot from the stable scroll layout, not whichever moving
@@ -271,12 +326,12 @@ func (pg *mainPage) table(c *ui.Context, p *d1Palette, rows []d1Row) {
 		}
 	})
 	if pg.showMenu {
-		pg.contextMenu(c, p)
+		pg.contextMenu(c, p, all)
 	}
 }
 
-func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns []taskColumnView) {
-	n, hidden := pg.selectionCounts(rows)
+func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows, all []d1Row, columns []taskColumnView) {
+	n, hidden := pg.selectionCounts(rows, all)
 	allOn := len(rows) > 0
 	for _, r := range rows {
 		if !pg.rowChecked(r.id) {
@@ -325,6 +380,10 @@ func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns
 							}
 							style.Icon(c, icon, 12, p.mu)
 						}
+						// 手动拖拽排序生效时在表头给出标记。
+						if pg.preferences.ManualTaskSort {
+							style.Icon(c, "grip-vertical", 12, p.mu).Tooltip(tr("手动排序"))
+						}
 					})
 					b.OnClick(func() {
 						if pg.preferences.ManualTaskSort || pg.preferences.TaskSortBy != "name" {
@@ -340,13 +399,37 @@ func (pg *mainPage) tableHead(c *ui.Context, p *d1Palette, rows []d1Row, columns
 					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(tr("按添加时间排序")).Tooltip(tr("最新添加的任务在最上方")).Cursor(ui.CursorPointer)
 					b.Children(func() {
 						ui.Text(c, tr(column.spec.title)).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
-						if !pg.preferences.ManualTaskSort && pg.preferences.TaskSortBy != "name" {
+						if !pg.preferences.ManualTaskSort && pg.preferences.TaskSortBy == "added" {
 							style.Icon(c, style.IconArrowDown, 12, p.mu)
 						}
 					})
 					b.OnClick(func() {
 						pg.preferences.TaskSortBy = "added"
 						pg.preferences.ManualTaskSort = false
+						pg.taskDragPreview = nil
+						pg.saveAppPreferences()
+					})
+				} else if column.spec.id == "size" || column.spec.id == "status" || column.spec.id == "remain" {
+					id := column.spec.id
+					sortLabel := i18n.F("按%s排序", tr(column.spec.title))
+					b := ui.ButtonBase(c).Gap(4).AlignItems(ui.Center).Label(sortLabel).Tooltip(sortLabel).Cursor(ui.CursorPointer)
+					b.Children(func() {
+						ui.Text(c, tr(column.spec.title)).FontSize(style.TextXS).TextColor(p.mu).SingleLine()
+						if !pg.preferences.ManualTaskSort && pg.preferences.TaskSortBy == id {
+							icon := style.IconArrowUp
+							if pg.sortDesc {
+								icon = style.IconArrowDown
+							}
+							style.Icon(c, icon, 12, p.mu)
+						}
+					})
+					b.OnClick(func() {
+						if pg.preferences.ManualTaskSort || pg.preferences.TaskSortBy != id {
+							pg.preferences.ManualTaskSort = false
+							pg.preferences.TaskSortBy = id
+						} else {
+							pg.sortDesc = !pg.sortDesc
+						}
 						pg.taskDragPreview = nil
 						pg.saveAppPreferences()
 					})
@@ -380,22 +463,24 @@ func (pg *mainPage) dragFilePaths(r d1Row) []string {
 	return paths
 }
 
-func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []taskColumnView, drag *taskDragFrame, overScroll bool) {
+func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []taskColumnView, drag *taskDragFrame, overScroll bool, lr ui.ListRow) {
 	childClicked := false
 	nameClicked, nameRightClicked := false, false
 	var nameClickMods ui.Modifiers
 	status := pg.rowStatus(r)
 	missing := !r.pending && r.snap.State == download.Done && pg.fileMissing[r.id]
+	// 行样式取列表共享状态：Selected 是列表选择，与应用勾选取并集；
+	// ListFocused 下键盘焦点所在行同样揭示行内操作。
+	on := lr.Selected() || pg.sel == r.id || pg.checked[r.id]
 	nameColor, detailColor := p.fg, p.mu
 	if missing {
 		background := p.card
-		if pg.sel == r.id || pg.checked[r.id] {
+		if on {
 			background = p.sel
 		}
 		nameColor = p.mu2.Mix(background, 0.35)
 		detailColor = nameColor
 	}
-	on := pg.sel == r.id || pg.checked[r.id]
 	c.Key(r.id)
 	row := taskGrid(c, columns).Height(style.HeightRow).Focusable().Role(ui.RoleRow).Selected(on).Label(r.rowName()).
 		BorderWidth(0, 0, 1, 0).BorderColor(p.bd).Cursor(ui.CursorPointer).
@@ -454,7 +539,7 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 					}
 				}
 				if failed && pg.win != nil {
-					pg.win.Update(func() { pg.flash(tr("移动后无法移除原文件")) })
+					pg.win.Update(func() { pg.flash("移动后无法移除原文件") })
 				}
 			}()
 		}})
@@ -468,7 +553,7 @@ func (pg *mainPage) tableRow(c *ui.Context, p *d1Palette, r d1Row, columns []tas
 		for i, column := range columns {
 			c.Key(column.spec.id)
 			last := i == len(columns)-1
-			reveal := row.Hovered() || row.FocusWithin()
+			reveal := row.Hovered() || row.FocusWithin() || (lr.ListFocused() && on)
 			ui.Row(c).Width(column.width).Height(style.HeightRow - 1).MinWidth(0).Clip().AlignItems(ui.Center).Children(func() {
 				value := ui.Row(c).FillWidth().MinWidth(0).AlignItems(ui.Center)
 				if last && reveal && column.spec.id != "name" {
@@ -692,6 +777,22 @@ func (pg *mainPage) rowActions(c *ui.Context, p *d1Palette, r d1Row, reveal bool
 		}
 	})
 	return clicked
+}
+
+// moveTaskSelection 把选中行移动到可见任务的目标位置（键盘导航），并把
+// 虚拟列表滚动到该行。目标越界收敛到首尾。
+func (pg *mainPage) moveTaskSelection(target int) {
+	rows := pg.visibleRows()
+	if len(rows) == 0 {
+		return
+	}
+	target = max(0, min(target, len(rows)-1))
+	id := rows[target].id
+	pg.clearTableSelection()
+	pg.setChecked(id, true)
+	pg.sel = id
+	pg.selAnchor = id
+	pg.taskList.ScrollIntoView(target)
 }
 
 // Row actions are transparent in every pointer state. Icon color and the

@@ -5,6 +5,8 @@ const localize = globalThis.openDLI18n.t;
 const MEDIA_KINDS = new Set(["video", "audio", "source", "network:media", "network:video", "network:playlist"]);
 const MEDIA_EXT = globalThis.openDLResourceTypes.media;
 
+document.getElementById("extension-version").textContent = localize("版本：%s", chrome.runtime.getManifest().version);
+
 const statusEl = document.getElementById("status");
 const connectionEl = document.getElementById("connection");
 const connectionLabel = connectionEl.querySelector(".conn-text");
@@ -13,9 +15,10 @@ const themeStorageKey = "opendl-desktop-theme";
 const darkScheme = matchMedia("(prefers-color-scheme: dark)");
 let desktopTheme = null;
 let receivedDesktopTheme = false;
+const isThemeColor = (color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color);
 function validTheme(theme) {
   return [theme?.light, theme?.dark].every((mode) => mode &&
-    [mode.primary, mode.onPrimary, mode.selection, mode.focus].every((color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)));
+    [mode.primary, mode.onPrimary, mode.selection, mode.focus].every(isThemeColor));
 }
 function applyDesktopTheme(theme) {
   if (!validTheme(theme)) return;
@@ -25,6 +28,7 @@ function applyDesktopTheme(theme) {
   document.documentElement.dataset.theme = mode;
   const style = document.documentElement.style;
   style.setProperty("--pri", colors.primary);
+  style.setProperty("--brand", isThemeColor(colors.brand) ? colors.brand : colors.primary);
   style.setProperty("--onpri", colors.onPrimary);
   style.setProperty("--sel", colors.selection);
   style.setProperty("--focus", colors.focus);

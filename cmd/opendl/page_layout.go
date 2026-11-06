@@ -158,7 +158,7 @@ func (pg *mainPage) panelLayoutWatch() {
 				select {
 				case <-pg.stop:
 				default:
-					pg.flash(tr("无法保存面板尺寸：") + err.Error())
+					pg.flash("无法保存面板尺寸：%s", err.Error())
 				}
 			})
 		}

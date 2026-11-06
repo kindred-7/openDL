@@ -34,7 +34,7 @@ func (pg *mainPage) takeDropped(drop transfer.Drop) {
 				return
 			}
 			if len(links) == 0 {
-				pg.flash(tr("未识别到下载链接"))
+				pg.flash("未识别到下载链接")
 				return
 			}
 			pg.dlgLinks = strings.Join(links, "\n")

@@ -379,7 +379,7 @@ func (pg *mainPage) openSettings() {
 		return
 	}
 	if pg.win == nil || !mygo.App.IsReady() {
-		pg.flash(tr("设置窗口需要桌面应用"))
+		pg.flash("设置窗口需要桌面应用")
 		return
 	}
 	s := &settingsPage{owner: pg, section: "常规", directory: pg.saveDir, rate: "0", schedule: pg.nightAt}
@@ -1705,6 +1705,12 @@ func (s *settingsPage) accentChoices(c *ui.Context, p *d1Palette) {
 	if scale, ok := style.Accent(accent); ok {
 		label = scale.Label
 	}
+	selIdx := 0
+	for i, option := range options {
+		if option.id == accent {
+			selIdx = i
+		}
+	}
 	c.Key("accent-picker")
 	choice := ui.SelectBase(c, &s.owner.preferences.AccentColor)
 	trigger := choice.Trigger.Width(settingsControlWidth).Height(style.HeightButton).Shrink(0).
@@ -1718,12 +1724,15 @@ func (s *settingsPage) accentChoices(c *ui.Context, p *d1Palette) {
 	})
 	trigger.OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 	choice.Popup(func(panel ui.Element) {
-		d1DropdownPanel(panel, p).Width(settingsControlWidth).MaxHeight(260).AttachTo(trigger, ui.AnchorBottomEnd, ui.AnchorTopEnd).Children(func() {
-			ui.Scroll(c).MaxHeight(248).FillWidth().Children(func() {
-				for _, option := range options {
+		al := selectAlignState(panel)
+		dy := al.apply(c, trigger, selIdx, len(options), 248)
+		d1DropdownPanel(panel, p).Top(dy).Width(settingsControlWidth).MaxHeight(260).AttachTo(trigger, ui.AnchorBottomEnd, ui.AnchorTopEnd).Children(func() {
+			ui.Scroll(c).MaxHeight(248).FillWidth().TrackScroll(&al.scroll).Children(func() {
+				for i, option := range options {
 					c.Key(option.id)
 					colors := style.NewAccentRules(p.dark, option.id).Colors
 					item := choice.Item(option.id).FillWidth().Padding(6, 8).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Label(tr(option.label)).Cursor(ui.CursorPointer)
+					al.measure(i, selIdx, item, panel)
 					if item.Highlighted() {
 						item.Background(p.hover)
 					}
@@ -1769,7 +1778,7 @@ func (s *settingsPage) themeChoices(c *ui.Context, p *d1Palette) {
 }
 
 func systemThemePreview(c *ui.Context, accent string) {
-	ui.Row(c).Size(74, 45).Radius(5).Border(1, d1Light().bd).Children(func() {
+	ui.Row(c).Size(74, 45).Radius(style.RadiusXS).Border(1, d1Light().bd).Children(func() {
 		for _, p := range []*d1Palette{d1AccentPalette(false, accent), d1AccentPalette(true, accent)} {
 			ui.Row(c).Width(36).FillHeight().Background(p.bg).Children(func() {
 				ui.Column(c).Width(9).FillHeight().Padding(4, 2).Background(p.card).Children(func() {
@@ -1787,7 +1796,7 @@ func systemThemePreview(c *ui.Context, accent string) {
 }
 
 func themePreview(c *ui.Context, p *d1Palette) {
-	ui.Row(c).Size(74, 45).Radius(5).Border(1, p.bd).Background(p.bg).Children(func() {
+	ui.Row(c).Size(74, 45).Radius(style.RadiusXS).Border(1, p.bd).Background(p.bg).Children(func() {
 		ui.Column(c).Width(17).FillHeight().Padding(4, 3).Gap(3).Background(p.card).
 			BorderWidth(0, 1, 0, 0).BorderColor(p.bd).Children(func() {
 			ui.Box(c).Size(8, 3).Radius(1.5).Background(p.mu2)
@@ -1941,11 +1950,11 @@ func settingsError(c *ui.Context, p *d1Palette, message string) {
 
 func settingsSwitch(c *ui.Context, p *d1Palette, label string, value *bool) ui.Element {
 	c.Key(label)
-	toggle := ui.SwitchBase(c, value).Size(style.SizeSwitchW, style.SizeSwitchH).Shrink(0).Radius(8).Label(tr(label)).Cursor(ui.CursorPointer)
+	toggle := ui.SwitchBase(c, value).Size(style.SizeSwitchW, style.SizeSwitchH).Shrink(0).Radius(style.RadiusMD).Label(tr(label)).Cursor(ui.CursorPointer)
 	left, track, thumb := switchMotion(toggle, p, *value)
 	toggle.Children(func() {
-		ui.Box(c).Size(style.SizeSwitchW, style.SizeSwitchH).Radius(8).Background(track).Children(func() {
-			ui.Box(c).Absolute().Left(left).Top(2).Size(12, 12).Radius(6).Background(thumb)
+		ui.Box(c).Size(style.SizeSwitchW, style.SizeSwitchH).Radius(style.RadiusMD).Background(track).Children(func() {
+			ui.Box(c).Absolute().Left(left).Top(2).Size(12, 12).Radius(style.RadiusSM).Background(thumb)
 		})
 	})
 	return toggle

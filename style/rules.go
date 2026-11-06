@@ -40,10 +40,11 @@ const LineHeight = 1.4
 
 // 圆角。
 const (
-	RadiusXS float32 = 5  // 徽章 .bd
-	RadiusSM float32 = 6  // 按钮 .bt/.ib、导航 .nav、输入 .cmd
-	RadiusMD float32 = 8  // 卡片 .card/.lim、菜单 .menu
-	RadiusLG float32 = 10 // 应用外壳 .app
+	RadiusXXS float32 = 4  // 弹层条目：面板 RadiusMD − Padding(4) 的同心圆半径
+	RadiusXS  float32 = 5  // 徽章 .bd
+	RadiusSM  float32 = 6  // 按钮 .bt/.ib、导航 .nav、输入 .cmd
+	RadiusMD  float32 = 8  // 卡片 .card/.lim、菜单 .menu
+	RadiusLG  float32 = 10 // 应用外壳 .app
 )
 
 // 高度与固定尺寸。
@@ -97,6 +98,61 @@ var TaskTable = struct {
 }{GapSM, GapLG + 2}
 
 // ── 颜色（design.html） ──────────────────────────────────────────────────
+
+// ── 浮层阴影（唯一阴影令牌） ────────────────────────────────────────────
+
+// 阴影只保留在浮层上（菜单、弹层、对话框、提示、拖动预览），全部收敛为
+// 同一档；Label、文字与普通容器不加阴影。
+const (
+	ShadowOverlayX      float32 = 0
+	ShadowOverlayY      float32 = 8
+	ShadowOverlayBlur   float32 = 24
+	ShadowOverlaySpread float32 = 0
+	ShadowOverlayRadius float32 = 8
+)
+
+// ShadowOverlayColor 是浮层阴影色。
+var ShadowOverlayColor = ui.RGBA(0, 0, 0, .14)
+
+// DimOverlayColor 是对话框遮罩色，浮层的一部分。
+var DimOverlayColor = ui.RGBA(0, 0, 0, .42)
+
+// ShadowOverlay 给浮层元素套用统一阴影。
+func ShadowOverlay(e ui.Element) ui.Element {
+	return e.Shadow(ShadowOverlayX, ShadowOverlayY, ShadowOverlayBlur, ShadowOverlaySpread, ShadowOverlayColor)
+}
+
+// White 是纯白实心面（Radix white），供开关滑块等中性实心面取色。
+var White = ui.Hex("#FFFFFF")
+
+// ── 状态与图表色（Radix 色阶取色） ──────────────────────────────────────
+
+// radixStep 取命名 Radix 色阶的浅色步（0=步 3 浅底、4=步 11 前景文字），
+// 与 accent.go 的 AccentScales 同源，不再有第二套硬编码色值。
+func radixStep(id string, step int) ui.Color {
+	scale, ok := Accent(id)
+	if !ok {
+		return ui.Color{}
+	}
+	return ui.Hex(scale.Light[step])
+}
+
+// 状态徽章、图表与详情图标色：Radix 蓝/绿/橙/黄/紫/红的步 3 与步 11。
+var (
+	BadgeBlueBg   = radixStep("blue", 0)
+	BadgeBlueFg   = radixStep("blue", 4)
+	BadgeGreenBg  = radixStep("green", 0)
+	BadgeGreenFg  = radixStep("green", 4)
+	BadgeOrangeBg = radixStep("orange", 0)
+	BadgeOrangeFg = radixStep("orange", 4)
+	BadgeYellowBg = radixStep("yellow", 0)
+	BadgeYellowFg = radixStep("yellow", 4)
+	DetailIconBg  = radixStep("violet", 0)
+	DetailIconFg  = radixStep("violet", 4)
+	ChartLine     = radixStep("blue", 4)
+	ChartUp       = radixStep("green", 4)
+	Danger        = radixStep("red", 4)
+)
 
 // Colors 保存设计稿的语义色，所有原生组件共用同一套亮/深主题。
 type Colors struct {

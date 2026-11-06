@@ -24,7 +24,7 @@ func (pg *mainPage) requestDelete(rows []d1Row) {
 func (pg *mainPage) deleteDialog(c *ui.Context, p *d1Palette) {
 	c.Key("delete-dialog")
 	ui.DialogBase(c, &pg.showDelete, func(back, panel ui.Element) {
-		back.Background(ui.RGBA(0, 0, 0, .42)).Center()
+		back.Background(style.DimOverlayColor).Center()
 		panel.Width(400).Padding(20).Radius(style.RadiusLG).Border(1, p.bd2).Background(p.bg).Label(tr("删除任务"))
 		ui.Column(c).Gap(14).Children(func() {
 			ui.Text(c, tr("删除任务")).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
@@ -82,7 +82,7 @@ func (pg *mainPage) confirmDelete() {
 		for _, row := range rows {
 			pg.removeRow(row)
 		}
-		pg.flash(fmt.Sprintf(tr("已删除 %d 个任务，文件保留在磁盘"), len(rows)))
+		pg.flash("已删除 %d 个任务，文件保留在磁盘", len(rows))
 		return
 	}
 	// Remove every requested task independently of whether it has a file.
@@ -91,7 +91,7 @@ func (pg *mainPage) confirmDelete() {
 		pg.removeRow(row)
 	}
 	if pg.win == nil {
-		pg.flash(fmt.Sprintf(tr("已删除 %d 个任务"), len(rows)) + "；" + tr("无法删除本地文件"))
+		pg.flash("已删除 %d 个任务；无法删除本地文件", len(rows))
 		return
 	}
 	pg.deleteBusy = true
@@ -119,9 +119,9 @@ func (pg *mainPage) confirmDelete() {
 		win.Update(func() {
 			pg.deleteBusy = false
 			if len(failed) > 0 {
-				pg.flash(fmt.Sprintf(tr("已删除 %d 个任务；%d 个文件无法移至回收站"), len(rows), len(failed)))
+				pg.flash("已删除 %d 个任务；%d 个文件无法移至回收站", len(rows), len(failed))
 			} else {
-				pg.flash(fmt.Sprintf(tr("已删除 %d 个任务"), len(rows)))
+				pg.flash("已删除 %d 个任务", len(rows))
 			}
 		})
 	}()

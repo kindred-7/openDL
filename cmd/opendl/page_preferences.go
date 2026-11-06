@@ -162,7 +162,7 @@ func validFileType(name string) bool {
 
 func (p *appPreferences) validate() {
 	switch p.TaskSortBy {
-	case "added", "name":
+	case "added", "name", "size", "status", "remain":
 	default:
 		p.TaskSortBy = "added"
 		// A stored descending name order is an explicit choice in older versions.
@@ -478,7 +478,10 @@ func (pg *mainPage) syncExtensionTheme() {
 	hex := func(c ui.Color) string { return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B) }
 	tokens := func(dark bool) api.ThemeColors {
 		c := style.NewAccentRules(dark, pg.preferences.AccentColor).Colors
-		return api.ThemeColors{Primary: hex(c.Primary), OnPrimary: hex(c.OnPrimary), Selection: hex(c.Selection), Focus: hex(c.Focus)}
+		return api.ThemeColors{
+			Primary: hex(c.Primary), OnPrimary: hex(c.OnPrimary),
+			Selection: hex(c.Selection), Focus: hex(c.Focus), Brand: hex(c.Brand),
+		}
 	}
 	active := "light"
 	if pg.dark {
@@ -574,6 +577,53 @@ func (pg *mainPage) settingsWatch() {
 			}
 			flush()
 			return
+		}
+	}
+}
+
+// queueFileWrite 把小文件落盘排到后台通道，界面线程从不阻塞在磁盘 I/O
+// 上；通道满时退化为独立协程写入。无窗口的纯内存模式同步执行。
+func (pg *mainPage) queueFileWrite(job func() error) {
+	if pg.ioWrites == nil {
+		_ = job()
+		return
+	}
+	select {
+	case pg.ioWrites <- job:
+	default:
+		go func() { _ = job() }()
+	}
+}
+
+// ioWatch 在后台执行界面线程排队的落盘动作，与 settingsWatch 同一模式：
+// 错误回到界面线程提示，退出前把已排队的写入执行完。
+func (pg *mainPage) ioWatch() {
+	defer close(pg.ioDone)
+	report := func(err error) {
+		if err == nil || pg.win == nil {
+			return
+		}
+		pg.win.Update(func() {
+			select {
+			case <-pg.stop:
+			default:
+				pg.flash("无法完成文件写入：%s", err.Error())
+			}
+		})
+	}
+	for {
+		select {
+		case job := <-pg.ioWrites:
+			report(job())
+		case <-pg.stop:
+			for {
+				select {
+				case job := <-pg.ioWrites:
+					_ = job()
+				default:
+					return
+				}
+			}
 		}
 	}
 }

@@ -48,21 +48,25 @@ func loadDetailPlacement() string {
 	return "bottom"
 }
 
+// rememberDetailPlacement 异步记住详情停靠位置：写盘走后台通道，
+// 界面线程不阻塞在文件 I/O 上。
 func (pg *mainPage) rememberDetailPlacement() {
 	// Headless views keep their state in memory without touching preferences.
 	if pg.win == nil {
 		return
 	}
 	path, err := detailPlacementPath()
-	if err == nil {
-		err = os.MkdirAll(filepath.Dir(path), 0o700)
-	}
-	if err == nil {
-		err = os.WriteFile(path, []byte(pg.detailPlacement), 0o600)
-	}
 	if err != nil {
-		pg.flash(tr("无法保存详情位置：") + err.Error())
+		pg.flash("无法保存详情位置：%s", err.Error())
+		return
 	}
+	value := pg.detailPlacement
+	pg.queueFileWrite(func() error {
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(path, []byte(value), 0o600)
+	})
 }
 
 func (pg *mainPage) setDetailPlacement(position string) {
@@ -78,8 +82,8 @@ func (pg *mainPage) setDetailPlacement(position string) {
 // 标题栏，向上的提示会与原生窗口按钮相叠。
 func d1TooltipBelow(c *ui.Context, p *d1Palette, anchor ui.Element, s string) {
 	ui.TooltipBase(c, anchor, func(tip ui.Element) {
-		tip.MaxWidth(320).Padding(5, 8).Radius(5).Background(p.fg).TextColor(p.bg).
-			FontSize(style.TextSM).Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, 0.2))
+		style.ShadowOverlay(tip.MaxWidth(320).Padding(5, 8).Radius(style.RadiusXS).Background(p.fg).TextColor(p.bg).
+			FontSize(style.TextSM))
 		tip.Children(func() { ui.Text(c, tr(s)) })
 		tip.AttachTo(anchor, ui.AnchorBottom, ui.AnchorTop).Margin(6, 0, 0, 0)
 	})
@@ -95,15 +99,15 @@ func (pg *mainPage) detailPositionControl(c *ui.Context, p *d1Palette) {
 		targetIcon, targetTip, target = "panel-bottom", "切换到底部显示", "bottom"
 	}
 	// 左段切换到另一停靠位置，右段固定为收起面板（最右侧始终是收起）。
-	ui.Row(c).Padding(2).Gap(2).Radius(6).Border(1, p.bd).Background(p.card).Children(func() {
-		other := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(5).Center().Cursor(ui.CursorPointer).
+	ui.Row(c).Padding(2).Gap(2).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).Children(func() {
+		other := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(style.RadiusXXS).Center().Cursor(ui.CursorPointer).
 			Role(ui.RoleToggleButton).Label(tr(targetTip))
 		hoverMotion(other, ui.Transparent, p.hover)
 		other.Children(func() { d1Icon(c, targetIcon, 16, p.mu) })
 		other.OnClick(func() { pg.setDetailPlacement(target) })
 		d1TooltipBelow(c, p, other, targetTip)
 
-		current := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(5).Center().Cursor(ui.CursorPointer).
+		current := ui.ButtonBase(c).Height(24).Padding(0, 7).Radius(style.RadiusXXS).Center().Cursor(ui.CursorPointer).
 			Role(ui.RoleToggleButton).Checked(true).Label(tr(closeTip))
 		current.Background(p.bg).Border(1, p.bd)
 		hoverMotion(current, p.bg, p.hover)
@@ -115,14 +119,14 @@ func (pg *mainPage) detailPositionControl(c *ui.Context, p *d1Palette) {
 
 // Both docking positions share the selection, tabs and body. Only the host
 // geometry changes, so switching positions cannot leave stale task details.
-func (pg *mainPage) detailPanel(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) detailPanel(c *ui.Context, p *d1Palette, all []d1Row) {
 	if pg.detailCollapsed {
 		return
 	}
 	right := pg.detailPlacement == "right"
 	panel := ui.Column(c).Fill().Background(p.card).Label(tr("任务详情"))
 	panel.Children(func() {
-		row, hasRow := pg.selectedRow()
+		row, hasRow := pg.selectedRowIn(all)
 		if right {
 			ui.Row(c).Height(38).Padding(0, 10).Gap(6).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, tr("任务详情")).Grow(1).Shrink(1).Basis(0).FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg)
@@ -216,7 +220,8 @@ func (pg *mainPage) detailPanel(c *ui.Context, p *d1Palette) {
 				more.OnClick(func() { pg.showDetailMenu = !pg.showDetailMenu }).
 					OnShortcut(0, ui.KeyDown, func() { pg.showDetailMenu = true })
 				ui.PopoverBase(c, more, &pg.showDetailMenu, func(panel ui.Element) {
-					d1DropdownPanel(panel, p).Width(230).AttachTo(more, ui.AnchorTopEnd, ui.AnchorBottomEnd).
+					// 向上展开的弹层：间距落在底边。
+					d1DropdownPanel(panel, p).Margin(0, 0, style.GapXS, 0).Width(230).AttachTo(more, ui.AnchorTopEnd, ui.AnchorBottomEnd).
 						Role(ui.RoleMenu).Label(tr("更多操作")).FocusGroup(ui.Vertical).Children(func() {
 						pg.taskMenuBody(c, p, row, false, func() { pg.showDetailMenu = false })
 					})

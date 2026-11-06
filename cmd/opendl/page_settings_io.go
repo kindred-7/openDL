@@ -4,7 +4,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -38,14 +37,14 @@ func (pg *mainPage) exportSettings() {
 	}
 	data, err := json.MarshalIndent(settingsExport(pg.preferences), "", "  ")
 	if err != nil {
-		pg.flash(fmt.Sprintf(tr("导出设置失败：%s"), err.Error()))
+		pg.flash("导出设置失败：%s", err.Error())
 		return
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		pg.flash(fmt.Sprintf(tr("导出设置失败：%s"), err.Error()))
+		pg.flash("导出设置失败：%s", err.Error())
 		return
 	}
-	pg.flash(fmt.Sprintf(tr("已导出设置：%s"), path))
+	pg.flash("已导出设置：%s", path)
 }
 
 // importSettings 从 JSON 文件导入设置并立即应用；密文凭据保持本机现状。
@@ -63,16 +62,16 @@ func (pg *mainPage) importSettings() {
 	}
 	data, err := os.ReadFile(paths[0])
 	if err != nil {
-		pg.flash(fmt.Sprintf(tr("导入设置失败：%s"), err.Error()))
+		pg.flash("导入设置失败：%s", err.Error())
 		return
 	}
 	var prefs appPreferences
 	if err := json.Unmarshal(data, &prefs); err != nil {
-		pg.flash(tr("设置文件格式无效"))
+		pg.flash("设置文件格式无效")
 		return
 	}
 	if _, err := download.NormalizeUserAgent(prefs.UserAgent); err != nil {
-		pg.flash(tr("导入设置失败：") + err.Error())
+		pg.flash("导入设置失败：%s", err.Error())
 		return
 	}
 	prefs.validate()
@@ -154,8 +153,8 @@ func (pg *mainPage) importSettings() {
 	setSiteRulesSource(prefs.SiteRulesURL)
 	pg.refreshSettingsWindow()
 	if len(problems) > 0 {
-		pg.flash(tr("已导入设置，部分设置未生效：") + strings.Join(problems, "；"))
+		pg.flash("已导入设置，部分设置未生效：%s", strings.Join(problems, "；"))
 	} else {
-		pg.flash(tr("已导入设置"))
+		pg.flash("已导入设置")
 	}
 }

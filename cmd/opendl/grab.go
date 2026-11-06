@@ -169,7 +169,6 @@ func mirrorSubdir(rootPage, link string) string {
 	return filepath.Join(cleaned...)
 }
 
-
 // grabProject 是保存的抓取项目：来源页与抓取参数，可选周期执行。
 type grabProject struct {
 	Name      string `json:"name"`
@@ -339,14 +338,71 @@ func (pg *mainPage) runGrabProject(project grabProject) {
 			default:
 			}
 			if added == 0 {
-				pg.flash(tr("抓取项目没有新增链接"))
+				pg.flash("抓取项目没有新增链接")
 				return
 			}
-			pg.flash(fmt.Sprintf(tr("抓取项目新增 %d 个任务"), added))
+			pg.flash("抓取项目新增 %d 个任务", added)
 		})
 	}()
 }
 
+// persistGrabProjects 后台保存项目表：成功后回到界面线程更新缓存并提示，
+// 失败按动作给出原因。界面线程不阻塞在文件 I/O 上。
+func (pg *mainPage) persistGrabProjects(projects []grabProject, failSource string, done func()) {
+	if pg.win == nil {
+		if err := saveGrabProjects(projects); err != nil {
+			pg.flash(failSource, err.Error())
+			return
+		}
+		done()
+		return
+	}
+	pg.queueFileWrite(func() error {
+		err := saveGrabProjects(projects)
+		pg.win.Update(func() {
+			select {
+			case <-pg.stop:
+			default:
+				if err != nil {
+					pg.flash(failSource, err.Error())
+					return
+				}
+				done()
+			}
+		})
+		return nil
+	})
+}
+
+// reloadGrabProjects 后台加载项目表并回到界面线程更新缓存，随后校验当前
+// 选择的项目是否仍存在；慢 I/O 不在 UI 线程执行。
+func (pg *mainPage) reloadGrabProjects() {
+	if pg.win == nil {
+		pg.grabProjectCache = loadGrabProjects()
+		if _, ok := findGrabProject(pg.grabProjectCache, pg.dlgGrabProject); !ok {
+			pg.dlgGrabProject = ""
+		}
+		return
+	}
+	win := pg.win
+	if pg.addWindow != nil {
+		win = pg.addWindow
+	}
+	go func() {
+		projects := loadGrabProjects()
+		pg.win.Update(func() {
+			select {
+			case <-pg.stop:
+			default:
+				pg.grabProjectCache = projects
+				if _, ok := findGrabProject(pg.grabProjectCache, pg.dlgGrabProject); !ok {
+					pg.dlgGrabProject = ""
+				}
+				win.Invalidate()
+			}
+		})
+	}()
+}
 
 // findGrabProject 按名称查找项目。
 func findGrabProject(projects []grabProject, name string) (grabProject, bool) {
@@ -397,7 +453,7 @@ func (pg *mainPage) saveGrabProject() {
 		}
 	}
 	if name == "" {
-		pg.flash(tr("请先填写来源页"))
+		pg.flash("请先填写来源页")
 		return
 	}
 	depth, _ := strconv.Atoi(pg.dlgGrabDepth)
@@ -423,16 +479,14 @@ func (pg *mainPage) saveGrabProject() {
 	}
 	projects = normalizeGrabProjects(projects)
 	if _, ok := findGrabProject(projects, name); !ok {
-		pg.flash(tr("抓取项目参数无效，未保存"))
+		pg.flash("抓取项目参数无效，未保存")
 		return
 	}
-	if err := saveGrabProjects(projects); err != nil {
-		pg.flash(fmt.Sprintf(tr("保存抓取项目失败：%s"), err.Error()))
-		return
-	}
-	pg.grabProjectCache = projects
-	pg.dlgGrabProject = name
-	pg.flash(fmt.Sprintf(tr("已保存抓取项目 %s"), name))
+	pg.persistGrabProjects(projects, "保存抓取项目失败：%s", func() {
+		pg.grabProjectCache = projects
+		pg.dlgGrabProject = name
+		pg.flash("已保存抓取项目 %s", name)
+	})
 }
 
 // removeGrabProject 删除选中的项目。
@@ -447,13 +501,11 @@ func (pg *mainPage) removeGrabProject() {
 			projects = append(projects, project)
 		}
 	}
-	if err := saveGrabProjects(projects); err != nil {
-		pg.flash(fmt.Sprintf(tr("删除抓取项目失败：%s"), err.Error()))
-		return
-	}
-	pg.grabProjectCache = projects
-	pg.dlgGrabProject = ""
-	pg.flash(fmt.Sprintf(tr("已删除抓取项目 %s"), name))
+	pg.persistGrabProjects(projects, "删除抓取项目失败：%s", func() {
+		pg.grabProjectCache = projects
+		pg.dlgGrabProject = ""
+		pg.flash("已删除抓取项目 %s", name)
+	})
 }
 
 // grabProjectRequest 按项目参数构造下载请求；镜像目录优先于分类归档。

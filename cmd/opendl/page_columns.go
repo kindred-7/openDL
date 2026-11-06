@@ -327,9 +327,8 @@ func (pg *mainPage) columnMenuButton(c *ui.Context, p *d1Palette) ui.Element {
 	// The native caption controls paint above the client area. Keep this
 	// toolbar tip below its button so it cannot overlap the close button.
 	ui.TooltipBase(c, trigger, func(tip ui.Element) {
-		tip.AttachTo(trigger, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0).
-			Padding(5, 8).Radius(5).Background(p.fg).TextColor(p.bg).FontSize(style.TextBase-1).
-			Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, .2)).Children(func() {
+		style.ShadowOverlay(tip.AttachTo(trigger, ui.AnchorBottomEnd, ui.AnchorTopEnd).Margin(6, 0, 0, 0).
+			Padding(5, 8).Radius(style.RadiusXS).Background(p.fg).TextColor(p.bg).FontSize(style.TextBase - 1)).Children(func() {
 			ui.Text(c, tr("显示列"))
 		})
 	})
@@ -357,7 +356,7 @@ func (pg *mainPage) columnMenuButton(c *ui.Context, p *d1Palette) ui.Element {
 				}
 				row.Children(func() {
 					c.Key("visibility")
-					item := ui.CheckboxBase(c, &on).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(32).Padding(0, 8).Gap(8).AlignItems(ui.Center).Radius(5).Cursor(ui.CursorPointer).
+					item := ui.CheckboxBase(c, &on).Grow(1).Shrink(1).Basis(0).MinWidth(0).Height(32).Padding(0, 8).Gap(8).AlignItems(ui.Center).Radius(style.RadiusXXS).Cursor(ui.CursorPointer).
 						Label(tr(spec.title)).Disabled(id == "name")
 					if item.Hovered() || item.FocusVisible() {
 						item.Background(p.hover)

@@ -57,22 +57,22 @@ func (pg *mainPage) runFinishAction() {
 	switch pg.preferences.FinishAction {
 	case "shutdown":
 		if err := requestShutdown(); err != nil {
-			pg.flash(tr("关闭计算机失败：") + err.Error())
+			pg.flash("关闭计算机失败：%s", err.Error())
 			return
 		}
-		pg.flash(tr("已请求 60 秒后关闭计算机"))
+		pg.flash("已请求 60 秒后关闭计算机")
 	case "sleep":
 		if err := requestSleep(); err != nil {
-			pg.flash(tr("进入睡眠失败：") + err.Error())
+			pg.flash("进入睡眠失败：%s", err.Error())
 		}
 	case "run":
 		program := strings.TrimSpace(pg.preferences.FinishProgram)
 		if program == "" {
-			pg.flash(tr("未配置完成后运行的程序"))
+			pg.flash("未配置完成后运行的程序")
 			return
 		}
 		if err := launchFinishProgram(program, pg.preferences.FinishArgs); err != nil {
-			pg.flash(tr("运行程序失败：") + err.Error())
+			pg.flash("运行程序失败：%s", err.Error())
 		}
 	}
 }

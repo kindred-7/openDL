@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"openDL/download"
+	"openDL/i18n"
 	"openDL/pathrec"
 	"openDL/style"
 
@@ -40,9 +41,10 @@ func d1Choice(c *ui.Context, p *d1Palette, label string, value *string, options 
 	c.Key(label)
 	choice := ui.SelectBase(c, value)
 	text := tr(label)
-	for _, o := range options {
+	idx := 0
+	for i, o := range options {
 		if o.value == *value {
-			text = optionLabel(o)
+			text, idx = optionLabel(o), i
 		}
 	}
 	width, _ := c.Size()
@@ -62,11 +64,14 @@ func d1Choice(c *ui.Context, p *d1Palette, label string, value *string, options 
 		d1Icon(c, "chev", 16, p.mu).Shrink(0).Rotate(arrow)
 	})
 	choice.Popup(func(panel ui.Element) {
-		d1DropdownPanel(panel, p).Width(choice.Trigger.Bounds().W).MaxHeight(260).Children(func() {
-			ui.Scroll(c).MaxHeight(248).FillWidth().Children(func() {
-				for _, o := range options {
+		al := selectAlignState(panel)
+		dy := al.apply(c, choice.Trigger, idx, len(options), 248)
+		d1DropdownPanel(panel, p).Top(dy).Width(choice.Trigger.Bounds().W).MaxHeight(260).Children(func() {
+			ui.Scroll(c).MaxHeight(248).FillWidth().TrackScroll(&al.scroll).Children(func() {
+				for i, o := range options {
 					c.Key(o.value)
-					item := choice.Item(o.value).FillWidth().Padding(6, 8).Gap(8).Radius(5).Justify(ui.Start).Cursor(ui.CursorPointer)
+					item := choice.Item(o.value).FillWidth().Padding(6, 8).Gap(8).Radius(style.RadiusXXS).Justify(ui.Start).Cursor(ui.CursorPointer)
+					al.measure(i, idx, item, panel)
 					if item.Highlighted() {
 						item.Background(p.hover)
 					}
@@ -83,9 +88,125 @@ func d1Choice(c *ui.Context, p *d1Palette, label string, value *string, options 
 	return choice.Trigger
 }
 
+// d1DropdownPanel 是下拉与菜单弹层的共用面板：阴影、圆角、配色统一；
+// 顶边 Margin 让弹层与触发器保持 GapXS 间距，翻转到上方时间距不变。
+// 向上展开的弹层要改写为同值的底边 Margin，侧向展开的按方向改写。
 func d1DropdownPanel(panel ui.Element, p *d1Palette) ui.Element {
-	return panel.Padding(4).Radius(8).Border(1, p.bd2).Background(p.bg).
-		Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, .14))
+	return style.ShadowOverlay(panel.Margin(style.GapXS, 0, 0, 0).Padding(4).Radius(style.RadiusMD).Border(1, p.bd2).Background(p.bg))
+}
+
+// selectAlignInset 是面板 Border(1)+Padding(4) 到滚动视口的距离；
+// selectAlignEdge 是框架 attachTo 的窗口边距 windowMargin。
+const (
+	selectAlignInset = 5
+	selectAlignEdge  = 4
+)
+
+// selectRowH 是弹层行高实测缓存（弹层行规格一致），供打开首帧估值。
+var selectRowH float32 = 28
+
+// selectAlign 让下拉弹层的对齐行（选中行）停在触发器中线，与 shadcn 的
+// Select 一致：面板整体上移、列表向上延伸到触发器上方，贴窗边时面板夹回
+// 窗内、由滚动补偿。状态挂在弹层面板上，每次打开自然重置；首帧按估值
+// 定位，实测几何到手后校正一次，此后不再干预用户滚动。
+type selectAlign struct {
+	scroll               ui.ScrollState
+	dy                   float32 // 施加给面板 Top 的偏移
+	usedDy               float32 // 上一帧布局用过的 dy，与实测几何配对
+	idx                  int
+	lockTC, lockMaxY     float32
+	locked, est          bool
+	measured             bool
+	row0Y, rowY          float32
+	rowH, panelY, panelH float32
+}
+
+func selectAlignState(panel ui.Element) *selectAlign {
+	return ui.Local(panel, "select-align", func() selectAlign { return selectAlign{} })
+}
+
+// measure 在构建条目时登记对齐行与首行的实测几何（取自上一帧布局）。
+func (a *selectAlign) measure(i, idx int, item, panel ui.Element) {
+	if i != 0 && i != idx {
+		return
+	}
+	b := item.Bounds()
+	if b.H <= 0 {
+		return
+	}
+	if i == 0 {
+		a.row0Y = b.Y
+	}
+	if i == idx {
+		a.rowY, a.rowH = b.Y, b.H
+		pb := panel.Bounds()
+		a.panelY, a.panelH = pb.Y, pb.H
+		a.measured = true
+		selectRowH = b.H
+	}
+}
+
+// apply 决定本帧面板的 Top 偏移与滚动位置并返回 dy：对齐行中心落在触发器
+// 中线上。n 是选项数，viewMaxH 是滚动视口上限（0 表示不滚动）。锁定后
+// 不再写滚动，交还给用户；行数、选中项或窗口变化时重新锁定。
+func (a *selectAlign) apply(c *ui.Context, trigger ui.Element, idx, n int, viewMaxH float32) float32 {
+	if n <= 0 {
+		return a.dy
+	}
+	tb := trigger.Bounds()
+	tcy := tb.Y + tb.H/2
+	_, winH := c.Size()
+	a.usedDy = a.dy
+	stable := a.locked && a.idx == idx && !(a.est && a.measured) &&
+		max(tcy-a.lockTC, a.lockTC-tcy) <= 0.5 &&
+		max(a.scroll.MaxY-a.lockMaxY, a.lockMaxY-a.scroll.MaxY) <= 0.5
+	if stable {
+		return a.dy
+	}
+	// 对齐行中心在滚动内容区的位置与视口高：实测优先，首帧用估值。
+	var rowContentY, vh, maxScroll, naturalY, panelH float32
+	if a.measured {
+		rowContentY = (a.rowY-a.row0Y) + a.rowH/2
+		panelH, vh = a.panelH, a.panelH-2*selectAlignInset
+		maxScroll = a.scroll.MaxY
+		naturalY = a.panelY - a.usedDy
+	} else {
+		rowH, contentH := selectRowH, float32(n)*selectRowH
+		rowContentY = float32(idx)*rowH + rowH/2
+		vh = contentH
+		if viewMaxH > 0 && vh > viewMaxH {
+			vh = viewMaxH
+		}
+		maxScroll = max(0, contentH-vh)
+		panelH = vh + 2*selectAlignInset
+		naturalY = selectNaturalY(tb.Y, tb.H, panelH, winH)
+	}
+	// 行中心放进视口中段（短列表自然归零），再把面板移到触发器中线。
+	target := min(max(rowContentY-vh/2, 0), maxScroll)
+	dy := tcy - naturalY - selectAlignInset - (rowContentY - target)
+	lo, hi := selectAlignEdge-naturalY, winH-selectAlignEdge-panelH-naturalY
+	dy = min(max(dy, min(lo, hi)), max(lo, hi))
+	// 面板被夹回窗内后行偏离中线的距离，尽量用滚动补回来。
+	if err := tcy - (naturalY + dy + selectAlignInset + rowContentY - target); err != 0 {
+		target = min(max(target-err, 0), maxScroll)
+	}
+	a.dy, a.idx, a.lockTC, a.lockMaxY = dy, idx, tcy, a.scroll.MaxY
+	a.est, a.locked = !a.measured, true
+	a.scroll.Y = target
+	return dy
+}
+
+// selectNaturalY 复刻框架 attachTo 对下方展开弹层的纵向定位（放不下时翻到
+// 上方、取溢出小的一侧），供首帧估值；实测到手后误差由校正自动消除。
+func selectNaturalY(tY, tH, panelH, winH float32) float32 {
+	over := func(p float32) float32 {
+		return max(0, selectAlignEdge-p) + max(0, p+panelH-(winH-selectAlignEdge))
+	}
+	p := tY + tH + style.GapXS
+	if q := tY - panelH - style.GapXS; over(p) > 0 && over(q) < over(p) {
+		p = q
+	}
+	return p
 }
 
 // d1MenuRow 是弹层行的共用外壳：配色、圆角、间距与聚焦语义统一。
@@ -94,20 +215,28 @@ func d1MenuRow(c *ui.Context, p *d1Palette, label string, enabled bool, keys ...
 	if len(keys) > 0 {
 		key = keys[0]
 	}
+	return d1MenuRowText(c, p, key, tr(label), enabled)
+}
+
+func d1MenuRowText(c *ui.Context, p *d1Palette, key, label string, enabled bool) ui.Element {
 	c.Key(key)
-	item := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(5).Cursor(ui.CursorPointer).
-		Role(ui.RoleMenuItem).Label(tr(label)).Disabled(!enabled).Justify(ui.Start)
+	item := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(style.RadiusXXS).Cursor(ui.CursorPointer).
+		Role(ui.RoleMenuItem).Label(label).Disabled(!enabled).Justify(ui.Start)
 	hoverMotion(item, ui.Transparent, p.hover)
 	return item
 }
 
 func d1DropdownItem(c *ui.Context, p *d1Palette, label, icon string, enabled bool, shortcut ...string) ui.Element {
-	item := d1MenuRow(c, p, label, enabled)
+	return d1DropdownItemText(c, p, label, tr(label), icon, enabled, shortcut...)
+}
+
+func d1DropdownItemText(c *ui.Context, p *d1Palette, key, label, icon string, enabled bool, shortcut ...string) ui.Element {
+	item := d1MenuRowText(c, p, key, label, enabled)
 	item.Children(func() {
 		if icon != "" {
 			d1Icon(c, icon, 16, p.mu)
 		}
-		ui.Text(c, tr(label)).Grow(1).Shrink(1).Basis(0).FontSize(style.TextBase).TextColor(p.fg).SingleLine().Tooltip(tr(label))
+		ui.Text(c, label).Grow(1).Shrink(1).Basis(0).FontSize(style.TextBase).TextColor(p.fg).SingleLine().Tooltip(label)
 		if len(shortcut) > 0 && shortcut[0] != "" {
 			ui.Text(c, shortcut[0]).Shrink(0).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
 		}
@@ -121,9 +250,13 @@ func d1MultiChoice(c *ui.Context, p *d1Palette, label, icon string, open *bool, 
 	c.Key(label)
 	text := tr(label)
 	var picked []string
-	for _, o := range options {
+	idx := 0
+	for i, o := range options {
 		if selected[o.value] {
 			picked = append(picked, optionLabel(o))
+			if len(picked) == 1 {
+				idx = i
+			}
 		}
 	}
 	if len(picked) > 0 {
@@ -149,13 +282,16 @@ func d1MultiChoice(c *ui.Context, p *d1Palette, label, icon string, open *bool, 
 	})
 	trigger.OnClick(func() { *open = !*open }).OnShortcut(0, ui.KeyDown, func() { *open = true })
 	ui.PopoverBase(c, trigger, open, func(panel ui.Element) {
-		d1DropdownPanel(panel, p).Width(trigger.Bounds().W).MaxHeight(260).
+		al := selectAlignState(panel)
+		dy := al.apply(c, trigger, idx, len(options), 248)
+		d1DropdownPanel(panel, p).Top(dy).Width(trigger.Bounds().W).MaxHeight(260).
 			AttachTo(trigger, ui.AnchorBottomStart, ui.AnchorTopStart).
 			Role(ui.RoleMenu).Label(tr(label)).FocusGroup(ui.Vertical).Children(func() {
-			ui.Scroll(c).MaxHeight(248).FillWidth().Children(func() {
-				for _, o := range options {
+			ui.Scroll(c).MaxHeight(248).FillWidth().TrackScroll(&al.scroll).Children(func() {
+				for i, o := range options {
 					on := selected[o.value]
 					item := d1MenuRow(c, p, o.label, true, o.value).Label(optionLabel(o))
+					al.measure(i, idx, item, panel)
 					item.Children(func() {
 						d1CheckMark(c, p, on)
 						if o.icon != "" {
@@ -180,15 +316,15 @@ func d1MultiChoice(c *ui.Context, p *d1Palette, label, icon string, open *bool, 
 
 func d1Switch(c *ui.Context, p *d1Palette, label, icon string, on *bool) ui.Element {
 	c.Key(label)
-	toggle := ui.SwitchBase(c, on).FillWidth().Gap(8).AlignItems(ui.Center).Radius(6).Label(tr(label)).Cursor(ui.CursorPointer)
+	toggle := ui.SwitchBase(c, on).FillWidth().Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Label(tr(label)).Cursor(ui.CursorPointer)
 	left, track, thumb := switchMotion(toggle, p, *on)
 	toggle.Children(func() {
 		if icon != "" {
 			d1Icon(c, icon, 16, p.mu)
 		}
 		ui.Text(c, tr(label)).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
-		ui.Box(c).Size(28, 16).Shrink(0).Radius(8).Background(track).Children(func() {
-			ui.Box(c).Absolute().Left(left).Top(2).Size(12, 12).Radius(6).Background(thumb)
+		ui.Box(c).Size(28, 16).Shrink(0).Radius(style.RadiusMD).Background(track).Children(func() {
+			ui.Box(c).Absolute().Left(left).Top(2).Size(12, 12).Radius(style.RadiusSM).Background(thumb)
 		})
 	})
 	return toggle
@@ -198,7 +334,7 @@ func d1Input(c *ui.Context, p *d1Palette, label, key string, value *string, pass
 	ui.Column(c).FillWidth().Shrink(1).Gap(5).Children(func() {
 		ui.Text(c, tr(label)).FontSize(style.TextSM).TextColor(p.mu)
 		c.Key(key)
-		input := ui.TextInputBase(c, value).FillWidth().Height(30).Padding(0, 10).Radius(6).
+		input := ui.TextInputBase(c, value).FillWidth().Height(30).Padding(0, 10).Radius(style.RadiusSM).
 			Border(1, p.bd2).Background(p.bg).TextColor(p.fg).FontSize(style.TextSM).Label(tr(label))
 		if password {
 			input.Password()
@@ -238,7 +374,7 @@ func d1PrimaryButton(c *ui.Context, p *d1Palette, label, icon string, enabled ..
 
 func d1Radio(c *ui.Context, p *d1Palette, value *int, option int, label string) {
 	c.Key(label)
-	b := ui.RadioBase(c, value, option).Height(28).Padding(0, 10).Radius(6).Border(1, p.bd).Label(tr(label)).Cursor(ui.CursorPointer)
+	b := ui.RadioBase(c, value, option).Height(28).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd).Label(tr(label)).Cursor(ui.CursorPointer)
 	if *value == option {
 		b.Background(p.sel)
 	} else if b.Hovered() {
@@ -247,24 +383,25 @@ func d1Radio(c *ui.Context, p *d1Palette, value *int, option int, label string) 
 	b.Children(func() { ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(p.fg) })
 }
 
-func (pg *mainPage) emptyTitle() string {
-	if len(pg.allRows()) > 0 {
-		return tr("没有符合条件的任务")
+// emptyTitle/emptyHint 返回空状态的源串；翻译只在显示处做一次。
+func (pg *mainPage) emptyTitle(all []d1Row) string {
+	if len(all) > 0 {
+		return "没有符合条件的任务"
 	}
-	return tr("还没有下载任务")
+	return "还没有下载任务"
 }
-func (pg *mainPage) emptyHint() string {
-	if len(pg.allRows()) > 0 {
-		return tr("可清除筛选、修改搜索或切换左侧视图")
+func (pg *mainPage) emptyHint(all []d1Row) string {
+	if len(all) > 0 {
+		return "可清除筛选、修改搜索或切换左侧视图"
 	}
-	return tr("点「添加 URL」粘贴地址，或从浏览器扩展嗅探发送")
+	return "点「添加 URL」粘贴地址，或从浏览器扩展嗅探发送"
 }
 
 func (pg *mainPage) limitLabel() string {
 	if !pg.limitOn {
 		return tr("无限制")
 	}
-	return tr("限速 ") + pg.limitValue + " MB/s"
+	return i18n.F("限速 %s MB/s", pg.limitValue)
 }
 func (pg *mainPage) setLimit(value string) {
 	pg.setLimitValue(value, true)
@@ -302,13 +439,14 @@ func (pg *mainPage) limitStatusControl(c *ui.Context, p *d1Palette) {
 	}
 	trigger.Children(func() {
 		d1Icon(c, "gauge", 14, color)
-		ui.Text(c, tr(pg.limitLabel())).FontSize(style.TextSM).TextColor(color).SingleLine()
+		ui.Text(c, pg.limitLabel()).FontSize(style.TextSM).TextColor(color).SingleLine()
 		d1Icon(c, "chev", 12, color).Rotate(arrow)
 	})
 	trigger.OnClick(func() { pg.showLimitMenu = !pg.showLimitMenu }).
 		OnShortcut(0, ui.KeyDown, func() { pg.showLimitMenu = true })
 	ui.PopoverBase(c, trigger, &pg.showLimitMenu, func(panel ui.Element) {
-		d1DropdownPanel(panel, p).MinWidth(150).AttachTo(trigger, ui.AnchorTopStart, ui.AnchorBottomStart).
+		// 向上展开的弹层：间距落在底边。
+		d1DropdownPanel(panel, p).Margin(0, 0, style.GapXS, 0).MinWidth(150).AttachTo(trigger, ui.AnchorTopStart, ui.AnchorBottomStart).
 			Role(ui.RoleMenu).Label(tr("速度限制")).FocusGroup(ui.Vertical).Children(func() {
 			d1DropdownItem(c, p, "无限制", "gauge", true).Role(ui.RoleMenuItemRadio).Checked(!pg.limitOn).AutoFocus().OnClick(func() { pg.showLimitMenu = false; pg.setLimit("0") })
 			for _, value := range []string{"1", "5", "10", "20"} {
@@ -323,12 +461,12 @@ func (pg *mainPage) limitStatusControl(c *ui.Context, p *d1Palette) {
 			})
 		})
 	})
-	trigger.Tooltip(tr("速度限制：") + pg.limitLabel())
+	trigger.Tooltip(i18n.F("速度限制：%s", pg.limitLabel()))
 }
 func (pg *mainPage) limitDialog(c *ui.Context, p *d1Palette) {
 	ui.DialogBase(c, &pg.showLimit, func(back, panel ui.Element) {
-		back.Background(ui.RGBA(0, 0, 0, .42))
-		panel.Width(360).Padding(18).Radius(8).Border(1, p.bd2).Background(p.bg).Label(tr("自定义限速"))
+		back.Background(style.DimOverlayColor)
+		panel.Width(360).Padding(18).Radius(style.RadiusMD).Border(1, p.bd2).Background(p.bg).Label(tr("自定义限速"))
 		ui.Column(c).Gap(12).Children(func() {
 			ui.Text(c, tr("自定义限速")).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
 			d1Input(c, p, "速度上限（MB/s）", "limit-value", &pg.limitDraft, false)
@@ -493,7 +631,7 @@ func (pg *mainPage) selectVisibleRows(rows []d1Row, allOn bool) {
 	}
 }
 
-func (pg *mainPage) selectionCounts(rows []d1Row) (visible, hidden int) {
+func (pg *mainPage) selectionCounts(rows, all []d1Row) (visible, hidden int) {
 	seen := map[string]bool{}
 	for _, r := range rows {
 		seen[r.id] = true
@@ -502,7 +640,7 @@ func (pg *mainPage) selectionCounts(rows []d1Row) (visible, hidden int) {
 		}
 	}
 	valid := map[string]bool{}
-	for _, r := range pg.allRows() {
+	for _, r := range all {
 		valid[r.id] = true
 		if pg.checked[r.id] && !seen[r.id] {
 			hidden++
@@ -672,7 +810,12 @@ func (pg *mainPage) canPause() bool {
 	return false
 }
 func (pg *mainPage) hasActive() bool {
-	for _, r := range pg.allRows() {
+	return pg.hasActiveIn(pg.allRows())
+}
+
+// hasActiveIn 在给定行快照上判断是否有运行中的任务；构建期传本帧快照。
+func (pg *mainPage) hasActiveIn(all []d1Row) bool {
+	for _, r := range all {
 		if !r.pending && !r.snap.Held && (r.snap.State == download.Running || r.snap.State == download.Queued) {
 			return true
 		}
@@ -712,6 +855,29 @@ func (pg *mainPage) taskShortcuts(c *ui.Context) {
 			pg.showMenu = true
 		}
 	})
+	// 键盘导航：方向键、翻页与 Home/End 在可见任务间移动选中行，虚拟
+	// 列表随选中行滚动。步长按当前可见行数计算。
+	page := 10
+	if first, last := pg.taskList.Visible(); last > first {
+		page = last - first
+	}
+	step := func(delta int) {
+		rows := pg.visibleRows()
+		index := -1
+		for i, r := range rows {
+			if r.id == pg.sel {
+				index = i
+				break
+			}
+		}
+		pg.moveTaskSelection(index + delta)
+	}
+	c.OnShortcut(0, ui.KeyUp, func() { step(-1) })
+	c.OnShortcut(0, ui.KeyDown, func() { step(1) })
+	c.OnShortcut(0, ui.KeyPageUp, func() { step(-page) })
+	c.OnShortcut(0, ui.KeyPageDown, func() { step(page) })
+	c.OnShortcut(0, ui.KeyHome, func() { pg.moveTaskSelection(0) })
+	c.OnShortcut(0, ui.KeyEnd, func() { pg.moveTaskSelection(1 << 30) })
 }
 
 func (pg *mainPage) primaryRowAction(r d1Row) (icon, label string) {
@@ -778,7 +944,7 @@ func (pg *mainPage) moveRowToQueue(r d1Row, queue string) {
 		return
 	}
 	if pg.mgr.MoveToQueue(r.id, queue) {
-		pg.flash(tr("已移至") + customQueueName(queue))
+		pg.flash("已移至%s", customQueueName(queue))
 	}
 }
 
@@ -789,9 +955,9 @@ func (pg *mainPage) moveQueue(r d1Row) {
 	if r.pending {
 		if r.snap.ID != "" {
 			if pg.mgr.MoveToMain(r.id, false) {
-				pg.flash(tr("已移至主队列，等待开始"))
+				pg.flash("已移至主队列，等待开始")
 			} else {
-				pg.flash(tr("任务正在暂停，请稍后重试"))
+				pg.flash("任务正在暂停，请稍后重试")
 			}
 			return
 		}
@@ -799,12 +965,12 @@ func (pg *mainPage) moveQueue(r d1Row) {
 			id := pg.mgr.AddPaused(req)
 			pg.sel = id
 			delete(pg.checked, r.id)
-			pg.flash(tr("已移至主队列，等待开始"))
+			pg.flash("已移至主队列，等待开始")
 		}
 		return
 	}
 	if pg.mgr.MoveToNight(r.id) {
-		pg.flash(tr("已移至夜间队列"))
+		pg.flash("已移至夜间队列")
 	}
 }
 
@@ -860,7 +1026,7 @@ func (pg *mainPage) moveSelectionToQueue(queue string) {
 		}
 	}
 	if moved == 0 {
-		pg.flash(tr("没有可移动的任务"))
+		pg.flash("没有可移动的任务")
 		return
 	}
 	label := tr("夜间队列")
@@ -872,7 +1038,7 @@ func (pg *mainPage) moveSelectionToQueue(queue string) {
 			label = customQueueName(queue)
 		}
 	}
-	pg.flash(fmt.Sprintf(tr("已移动 %d 个任务到 %s"), moved, label))
+	pg.flash("已移动 %d 个任务到 %s", moved, label)
 }
 
 func (pg *mainPage) openAdd(extract bool) {
@@ -902,10 +1068,8 @@ func (pg *mainPage) openAdd(extract bool) {
 		pg.dlgGrabDepth = "0"
 	}
 	if extract {
-		pg.grabProjectCache = loadGrabProjects()
-		if _, ok := findGrabProject(pg.grabProjectCache, pg.dlgGrabProject); !ok {
-			pg.dlgGrabProject = ""
-		}
+		// 项目表从磁盘加载走后台，界面线程不做文件 I/O。
+		pg.reloadGrabProjects()
 	}
 	// 按链接后缀预选媒体下载方式；用户改选后即以选择为准。
 	pg.dlgMedia = 0

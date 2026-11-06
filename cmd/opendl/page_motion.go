@@ -3,6 +3,8 @@ package main
 import (
 	"time"
 
+	"openDL/style"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -206,5 +208,5 @@ func hoverMotion(e ui.Element, base, hover ui.Color) {
 
 func switchMotion(toggle ui.Element, p *d1Palette, on bool) (float32, ui.Color, ui.Color) {
 	amount := toggle.Animate("switch-position", motionTarget(on), selectMotion)
-	return 2 + 12*amount, p.bd2.Mix(p.pri, amount), ui.Hex("#FFFFFF").Mix(p.onpri, amount)
+	return 2 + 12*amount, p.bd2.Mix(p.pri, amount), style.White.Mix(p.onpri, amount)
 }

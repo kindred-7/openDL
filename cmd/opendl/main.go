@@ -1,15 +1,16 @@
 package main
 
 import (
+	"crypto/md5"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"openDL/api"
@@ -25,380 +26,7 @@ import (
 
 const appBrand = "OpenDL"
 
-// app holds the dashboard state. The UI lives in dashboard.go.
-type app struct {
-	mgr       *download.Manager
-	query     string
-	input     string
-	status    string
-	copyUntil time.Time
-	saveDir   string
-	dark      bool
-
-	showAdd    bool
-	showDetail bool
-	detailID   string
-	checks     map[string]*bool
-	focus      string
-
-	list ui.ListState
-	sel  int
-
-	nav int // sidebar selection
-	tab int // filter tab: 全部/视频/文档/压缩包/软件
-
-	// Detail-panel options.
-	seg                           int
-	limitOn, shutdownOn, verifyOn bool
-	limitSpeed, threads           float64
-
-	// Speed history for the charts.
-	histMu sync.Mutex
-	hist   []float64
-
-	hashMu sync.Mutex
-	hashes map[string]fileHash
-	svc    *ui.Services
-}
-
-type fileHash struct {
-	sha, md5 string
-	done     bool
-}
-
-func (a *app) view(c *ui.Context) {
-	if a.svc == nil {
-		s := c.Services()
-		a.svc = &s
-		a.sel = -1
-		a.nav = 1 // 下载中
-		a.threads = 16
-		a.limitSpeed = 100
-		a.list.Selected = &a.sel
-		a.list.Sort = &ui.SortOrder{Column: "创建时间", Descending: true}
-	}
-	p := style.Dark()
-	if !a.dark {
-		p = style.Light()
-	}
-	c.SetTheme(p.Theme())
-	if c.Shortcut(ui.Ctrl, ui.KeyK) {
-		a.focus = "search"
-	}
-	w, _ := c.Size()
-	cols := a.columnsFor(w)
-	snaps := a.visible()
-
-	ui.Column(c).Fill().Background(p.Background).Children(func() {
-		a.topBar(c, p)
-		ui.Row(c).Fill().Padding(16).Gap(16).Children(func() {
-			a.sidebar(c, p)
-			ui.Column(c).Fill().Gap(16).Children(func() {
-				a.kpiRow(c, p, snaps)
-				a.tabRow(c, p, snaps)
-				a.tableCard(c, p, cols, snaps)
-				a.queueCard(c, p, snaps)
-				if remaining := time.Until(a.copyUntil); remaining > 0 {
-					c.After(remaining)
-					indicator := ui.Box(c).AlignSelf(ui.End).Role(ui.RoleStatus).Label(tr("已复制到剪贴板"))
-					progress := indicator.Animate("copy-status", 1, 160*time.Millisecond)
-					indicator.Children(func() { style.Icon(c, style.IconCheck, 16, p.TextFaint).Scale(0.9+0.1*progress, 0.9+0.1*progress) })
-				} else {
-					ui.Text(c, tr(a.status)).SingleLine().FontSize(11).TextColor(p.TextFaint).AlignSelf(ui.End)
-				}
-			})
-			a.detailPanel(c, p, snaps)
-		})
-	})
-}
-
-// ── selection helpers ────────────────────────────────────────────────────
-
-func (a *app) checkbox(id string) *bool {
-	if a.checks == nil {
-		a.checks = map[string]*bool{}
-	}
-	if b, ok := a.checks[id]; ok {
-		return b
-	}
-	b := new(bool)
-	a.checks[id] = b
-	return b
-}
-
-func (a *app) checked(id string) bool {
-	b, ok := a.checks[id]
-	return ok && *b
-}
-
-func (a *app) totalSpeed(snaps []download.Snapshot) int64 {
-	var sum int64
-	for _, s := range snaps {
-		sum += s.Speed
-	}
-	return sum
-}
-
-// pushHistory records one speed sample for the charts.
-func (a *app) pushHistory(v float64) {
-	a.histMu.Lock()
-	a.hist = append(a.hist, v)
-	if len(a.hist) > 60 {
-		a.hist = a.hist[len(a.hist)-60:]
-	}
-	a.histMu.Unlock()
-}
-
-// histValues returns up to the last n samples.
-func (a *app) histValues(n int) []float64 {
-	a.histMu.Lock()
-	defer a.histMu.Unlock()
-	if len(a.hist) > n {
-		return append([]float64(nil), a.hist[len(a.hist)-n:]...)
-	}
-	return append([]float64(nil), a.hist...)
-}
-
-func (a *app) peakSpeed() int64 {
-	a.histMu.Lock()
-	defer a.histMu.Unlock()
-	var peak float64
-	for _, v := range a.hist {
-		if v > peak {
-			peak = v
-		}
-	}
-	return int64(peak)
-}
-
-// ── filtering and ordering ───────────────────────────────────────────────
-
-// visible narrows the rows by sidebar view, filter tab and search box, then
-// orders them by the sorted column.
-func (a *app) visible() []download.Snapshot {
-	all := a.mgr.Snapshots()
-	cat := ""
-	if a.tab >= 0 && a.tab < len(tabDefs) {
-		cat = tabDefs[a.tab].cat
-	}
-	q := strings.ToLower(strings.TrimSpace(a.query))
-	snaps := all[:0:0]
-	for _, s := range all {
-		switch a.nav {
-		case 2: // 已完成
-			if s.State != download.Done {
-				continue
-			}
-		case 3: // 已暂停
-			if s.State != download.Canceled {
-				continue
-			}
-		case 4, 6: // 计划任务 / 回收站: empty views
-			continue
-		}
-		if cat != "" && !inCategory(cat, s) {
-			continue
-		}
-		if q != "" && !strings.Contains(strings.ToLower(s.Name), q) &&
-			!strings.Contains(strings.ToLower(s.URL), q) {
-			continue
-		}
-		snaps = append(snaps, s)
-	}
-	so := a.list.Sort
-	if so == nil || so.Column == "" {
-		return snaps
-	}
-	less := func(i, j int) bool {
-		x, y := snaps[i], snaps[j]
-		switch so.Column {
-		case "文件名":
-			return strings.ToLower(x.Name) < strings.ToLower(y.Name)
-		case "大小":
-			return x.Total < y.Total
-		case "状态":
-			return x.State < y.State
-		case "速度":
-			return x.Speed < y.Speed
-		case "创建时间":
-			return x.Created.Before(y.Created)
-		}
-		return false
-	}
-	sort.SliceStable(snaps, func(i, j int) bool {
-		if so.Descending {
-			return less(j, i)
-		}
-		return less(i, j)
-	})
-	return snaps
-}
-
-// ── commands ─────────────────────────────────────────────────────────────
-
-func (a *app) command(item string) {
-	snaps := a.visible()
-	var s *download.Snapshot
-	if a.sel >= 0 && a.sel < len(snaps) {
-		s = &snaps[a.sel]
-	}
-	switch item {
-	case "添加":
-		a.enqueue(a.input)
-		a.input = ""
-	case "粘贴":
-		raw := ""
-		if a.svc != nil {
-			raw = a.svc.ReadClipboard()
-		}
-		if strings.TrimSpace(raw) == "" {
-			a.status = tr("剪贴板里没有链接")
-			return
-		}
-		a.enqueue(raw)
-	case "停止":
-		if s == nil {
-			a.status = tr("请先在列表里选中一个任务")
-			return
-		}
-		a.mgr.Cancel(s.ID)
-		a.status = tr("已暂停：") + s.Name
-	case "停止全部":
-		for _, x := range snaps {
-			if x.State == download.Running || x.State == download.Queued {
-				a.mgr.Cancel(x.ID)
-			}
-		}
-		a.status = tr("已暂停全部任务")
-	case "开始队列":
-		n := 0
-		for _, x := range snaps {
-			if x.State == download.ErrorS || x.State == download.Canceled {
-				a.mgr.Add(download.Request{URL: x.URL})
-				n++
-			}
-		}
-		a.status = fmt.Sprintf(tr("已继续 %d 个任务"), n)
-	case "删除所选":
-		n := 0
-		for _, x := range snaps {
-			if a.checked(x.ID) {
-				a.mgr.Cancel(x.ID)
-				a.mgr.Remove(x.ID)
-				n++
-			}
-		}
-		if n == 0 && s != nil {
-			a.mgr.Cancel(s.ID)
-			a.mgr.Remove(s.ID)
-			n = 1
-		}
-		a.checks = map[string]*bool{}
-		a.status = fmt.Sprintf(tr("已删除 %d 个任务"), n)
-	}
-}
-
-func (a *app) toggleTheme() {
-	a.dark = !a.dark
-	applyNativeTheme(a.dark)
-	saveTheme(a.dark)
-	a.status = fmt.Sprintf(tr("已切换到%s主题"), tr(map[bool]string{false: "浅色", true: "深色"}[a.dark]))
-}
-
-func (a *app) enqueue(raw string) {
-	raw = strings.TrimSpace(raw)
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ftp" && u.Scheme != "ftps") || u.Host == "" {
-		a.status = tr("请输入 http(s) URL")
-		return
-	}
-	a.mgr.Add(download.Request{URL: raw})
-	a.status = tr("已加入队列")
-}
-
-// onChange runs after every engine state change, off the UI thread.
-func (a *app) onChange() {
-	var sum int64
-	for _, s := range a.mgr.Snapshots() {
-		sum += s.Speed
-	}
-	a.pushHistory(float64(sum))
-	if a.svc != nil {
-		a.svc.Invalidate()
-	}
-}
-
 // ── text helpers ─────────────────────────────────────────────────────────
-
-// stateText marks tasks whose file disappeared from disk.
-func stateText(s download.Snapshot) string {
-	if s.State == download.Done && s.FilePath != "" {
-		if _, err := os.Stat(s.FilePath); os.IsNotExist(err) {
-			return "文件已删除"
-		}
-	}
-	return stateLabel(s.State)
-}
-
-func stateLabel(s download.State) string {
-	switch s {
-	case download.Queued:
-		return "排队中"
-	case download.Running:
-		return "下载中"
-	case download.Done:
-		return "已完成"
-	case download.Canceled:
-		return "已暂停"
-	default:
-		return "出错"
-	}
-}
-
-func progress(s download.Snapshot) float64 {
-	if s.Total <= 0 {
-		if s.State == download.Done {
-			return 1
-		}
-		return -1
-	}
-	return float64(s.Done) / float64(s.Total)
-}
-
-func pctText(s download.Snapshot) string {
-	if s.Total <= 0 {
-		if s.State == download.Done {
-			return "100%"
-		}
-		return "—"
-	}
-	return strconv.Itoa(int(float64(s.Done)/float64(s.Total)*100)) + "%"
-}
-
-func sizeText(s download.Snapshot) string {
-	if s.Total > 0 {
-		return bytesText(s.Total)
-	}
-	if s.Done > 0 {
-		return bytesText(s.Done)
-	}
-	return "—"
-}
-
-func speedText(s download.Snapshot) string {
-	if s.Speed > 0 {
-		return bytesText(s.Speed) + "/s"
-	}
-	return "—"
-}
-
-func remainText(s download.Snapshot) string {
-	if s.State == download.Done || s.Speed <= 0 || s.Total <= s.Done {
-		return "—"
-	}
-	sec := (s.Total - s.Done) / s.Speed
-	return durationText(time.Duration(sec) * time.Second)
-}
 
 func durationText(d time.Duration) string {
 	sec := int64(d / time.Second)
@@ -418,14 +46,6 @@ func bytesText(n int64) string {
 	}
 }
 
-func trunc(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return s
-	}
-	return string(r[:n]) + "…"
-}
-
 func hostOf(raw string) string {
 	if u, err := url.Parse(raw); err == nil {
 		return u.Hostname()
@@ -433,13 +53,27 @@ func hostOf(raw string) string {
 	return ""
 }
 
-// urlParse returns the host of a URL for the 来源 column glyph.
-func urlParse(raw string) (string, error) {
-	u, err := url.Parse(raw)
+// hashFile computes a completed file's SHA-256 and MD5 in one read.
+func hashFile(path string) (string, string) {
+	f, err := os.Open(path)
 	if err != nil {
-		return "", err
+		return "—", "—"
 	}
-	return u.Hostname(), nil
+	defer f.Close()
+	sha := sha256.New()
+	md := md5.New()
+	if _, err := io.Copy(io.MultiWriter(sha, md), f); err != nil {
+		return "—", "—"
+	}
+	return shortHash(hex.EncodeToString(sha.Sum(nil))), shortHash(hex.EncodeToString(md.Sum(nil)))
+}
+
+// shortHash renders "3f2a6e…d9c4e7" like the reference.
+func shortHash(h string) string {
+	if len(h) <= 11 {
+		return h
+	}
+	return h[:6] + "…" + h[len(h)-5:]
 }
 
 func categoryLabel(name string) string {
@@ -471,23 +105,6 @@ func categoryIcon(name string) string {
 		return "box"
 	default:
 		return "file"
-	}
-}
-
-func extColor(p *style.Palette, name string) ui.Color {
-	switch categoryLabel(name) {
-	case "程序":
-		return style.BadgeBlueFg
-	case "文档":
-		return style.BadgeGreenFg
-	case "音乐":
-		return style.DetailIconFg
-	case "视频":
-		return style.BadgeOrangeFg
-	case "压缩包":
-		return style.BadgeYellowFg
-	default:
-		return p.TextSoft
 	}
 }
 
@@ -673,34 +290,6 @@ func categoryDirTable(dirs map[string]string) (map[string]string, string) {
 	return byExt, dirs["other"]
 }
 
-func inCategory(id string, s download.Snapshot) bool {
-	switch id {
-	case "", "all":
-		return true
-	case "active":
-		return s.State != download.Done
-	case "done":
-		return s.State == download.Done
-	}
-	ext := strings.ToLower(filepath.Ext(s.Name))
-	if id == "other" {
-		for _, bucket := range activeCatExt {
-			for _, e := range bucket {
-				if ext == e {
-					return false
-				}
-			}
-		}
-		return true
-	}
-	for _, e := range activeCatExt[id] {
-		if ext == e {
-			return true
-		}
-	}
-	return false
-}
-
 // ── theme persistence ────────────────────────────────────────────────────
 
 var themeOverride string
@@ -733,20 +322,6 @@ func loadThemeMode() string {
 		}
 	}
 	return "light"
-}
-
-// Context.SetTheme styles client content only. Native caption controls and
-// system menus follow the application appearance source instead.
-func applyNativeTheme(dark bool) {
-	// Headless views have no native event loop or caption to update.
-	if !mygo.App.IsReady() {
-		return
-	}
-	source := mygo.ThemeLight
-	if dark {
-		source = mygo.ThemeDark
-	}
-	mygo.Theme.SetSource(source)
 }
 
 func applyNativeThemeMode(mode string) {
@@ -795,12 +370,14 @@ func downloadDir() string {
 
 func main() {
 	if nativehost.IsBrowserInvocation(os.Args[1:]) {
-		nativehost.Run()
+		nativehost.RunWithVersion(mygo.App.Version())
 		return
 	}
 	if runUpdateHelper() {
 		return
 	}
+	// 诊断日志：标准 log 输出滚动写入日志文件，stderr 输出保持不变。
+	setupDiagLog()
 	// 注册界面字体：Geist + MiSans。
 	if err := style.RegisterFonts(); err != nil {
 		log.Printf("register fonts: %v", err)
@@ -970,22 +547,18 @@ func main() {
 		pg.proxyPassword = proxyPassword
 		pg.proxyError = proxySettingsStatus(proxyErr)
 		if persistenceErr != nil {
-			pg.status = tr("下载记录恢复失败：") + persistenceErr.Error()
-			pg.statusAt = time.Now()
+			pg.flash("下载记录恢复失败：%s", persistenceErr.Error())
 		} else if apiErr != nil {
-			pg.status = tr("浏览器接入不可用：") + apiErr.Error()
-			pg.statusAt = time.Now()
+			pg.flash("浏览器接入不可用：%s", apiErr.Error())
 		} else if windowsAuthErr != nil {
-			pg.status = tr("Windows 集成认证配置无效，请在设置中修正：") + windowsAuthErr.Error()
+			pg.flash("Windows 集成认证配置无效，请在设置中修正：%s", windowsAuthErr.Error())
 		} else if proxyErr != nil {
-			pg.status = pg.proxyError
-			pg.statusAt = time.Now()
+			pg.flash(pg.proxyError)
 		}
 		if message := updateFailureMessage(os.Args); message != "" {
 			pg.updater.message = message
 			if pg.status == "" {
-				pg.status = message
-				pg.statusAt = time.Now()
+				pg.flash(message)
 			}
 		}
 		mainWindowPage = pg
@@ -1094,5 +667,9 @@ func main() {
 	}
 	if mainWindowPage != nil && mainWindowPage.settingsDone != nil {
 		<-mainWindowPage.settingsDone
+	}
+	// ioWatch 退出前排干已排队的小文件写入，等待收尾避免落盘被进程退出截断。
+	if mainWindowPage != nil && mainWindowPage.ioDone != nil {
+		<-mainWindowPage.ioDone
 	}
 }

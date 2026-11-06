@@ -32,16 +32,16 @@ func (pg *mainPage) openSource(row d1Row) {
 func (pg *mainPage) sourceDialog(c *ui.Context, p *d1Palette) {
 	ui.DialogBase(c, &pg.showSource, func(back, panel ui.Element) {
 		_, h := c.Size()
-		back.Background(ui.RGBA(0, 0, 0, .42)).Center()
-		panel.Width(540).MaxHeight(h-48).Padding(18).Radius(8).Border(1, p.bd2).Background(p.bg).
-			Label(tr("更新下载信息")).Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, .14)).Children(func() {
+		back.Background(style.DimOverlayColor).Center()
+		style.ShadowOverlay(panel.Width(540).MaxHeight(h-48).Padding(18).Radius(style.RadiusMD).Border(1, p.bd2).Background(p.bg).
+			Label(tr("更新下载信息"))).Children(func() {
 			ui.Column(c).FillWidth().Gap(12).Children(func() {
 				ui.Text(c, tr("更新下载信息")).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
 				ui.Text(c, tr("更换地址后将从头下载；原地址更新凭据可保留已完成分段。")).FontSize(style.TextSM).TextColor(p.mu)
 				ui.Column(c).FillWidth().Gap(5).Children(func() {
 					ui.Text(c, tr("下载地址")).FontSize(style.TextSM).TextColor(p.mu)
 					c.Key("source-url")
-					input := ui.TextInputBase(c, &pg.sourceURL).FillWidth().Height(30).Padding(0, 10).Radius(6).
+					input := ui.TextInputBase(c, &pg.sourceURL).FillWidth().Height(30).Padding(0, 10).Radius(style.RadiusSM).
 						Border(1, p.bd2).Background(p.bg).TextColor(p.fg).FontSize(style.TextSM).Label(tr("下载地址")).FocusBind(&pg.focus, "source-url")
 					if input.Focused() {
 						input.BorderColor(p.pri)
@@ -56,19 +56,19 @@ func (pg *mainPage) sourceDialog(c *ui.Context, p *d1Palette) {
 					ui.Text(c, tr("签名公钥（可选）")).FontSize(style.TextSM).TextColor(p.mu)
 					c.Key("source-signature-key")
 					ui.TextArea(c, &pg.sourceSignatureKey).Height(48).Padding(8, 10).FontSize(style.TextSM).
-						Label(tr("签名公钥（可选）")).Background(p.bg).Border(1, p.bd2).Radius(6)
+						Label(tr("签名公钥（可选）")).Background(p.bg).Border(1, p.bd2).Radius(style.RadiusSM)
 				})
 				ui.Column(c).FillWidth().Gap(5).Children(func() {
 					ui.Text(c, tr("分离签名（可选）")).FontSize(style.TextSM).TextColor(p.mu)
 					c.Key("source-signature")
 					ui.TextArea(c, &pg.sourceSignature).Height(48).Padding(8, 10).FontSize(style.TextSM).
-						Label(tr("分离签名（可选）")).Background(p.bg).Border(1, p.bd2).Radius(6)
+						Label(tr("分离签名（可选）")).Background(p.bg).Border(1, p.bd2).Radius(style.RadiusSM)
 				})
 				ui.Column(c).FillWidth().Gap(5).Children(func() {
 					ui.Text(c, tr("额外请求头（每行 名称: 值）")).FontSize(style.TextSM).TextColor(p.mu)
 					c.Key("source-headers")
 					ui.TextArea(c, &pg.sourceHeaders).Height(76).Padding(8, 10).FontSize(style.TextSM).
-						Label(tr("额外请求头")).Background(p.bg).Border(1, p.bd2).Radius(6)
+						Label(tr("额外请求头")).Background(p.bg).Border(1, p.bd2).Radius(style.RadiusSM)
 				})
 				if pg.sourceError != "" {
 					ui.Text(c, tr(pg.sourceError)).Role(ui.RoleStatus).FontSize(style.TextSM).TextColor(p.bad)

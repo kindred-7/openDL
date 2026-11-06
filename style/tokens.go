@@ -44,24 +44,6 @@ func paletteFromRules(dark bool) *Palette {
 		Inverse: c.Fg, InverseText: c.Bg}
 }
 
-// Dashboard accents from the reference design: soft badge pairs, chart
-// colors and the detail-panel icon tint.
-var (
-	BadgeBlueBg   = ui.Hex("#E8F0FE")
-	BadgeBlueFg   = ui.Hex("#2563EB")
-	BadgeGreenBg  = ui.Hex("#E6F7EC")
-	BadgeGreenFg  = ui.Hex("#16A34A")
-	BadgeOrangeBg = ui.Hex("#FDF0E2")
-	BadgeOrangeFg = ui.Hex("#D97706")
-	BadgeYellowBg = ui.Hex("#FBF7E3")
-	BadgeYellowFg = ui.Hex("#CA8A04")
-	DetailIconBg  = ui.Hex("#EDE9FE")
-	DetailIconFg  = ui.Hex("#7C3AED")
-	ChartLine     = ui.Hex("#2563EB")
-	ChartUp       = ui.Hex("#22C55E")
-	Danger        = ui.Hex("#DC2626")
-)
-
 // Metrics in the shadcn spirit: 4px spacing base, 8px radius, 13px text.
 const (
 	radius     = 8

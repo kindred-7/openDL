@@ -3,6 +3,8 @@ package main
 import (
 	"strings"
 
+	"openDL/i18n"
+
 	"github.com/egoist/mygo/ui"
 )
 
@@ -98,7 +100,7 @@ func shortcutConflict(prefs appPreferences, id, value string) string {
 		if item.id != id {
 			m, k, valid := parseShortcut(shortcutText(prefs, item.id))
 			if valid && m == mods && k == key {
-				return "快捷键已用于：" + tr(item.title)
+				return i18n.F("快捷键已用于：%s", tr(item.title))
 			}
 		}
 	}

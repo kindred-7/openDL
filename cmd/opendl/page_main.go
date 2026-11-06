@@ -30,6 +30,7 @@ import (
 
 	"openDL/api"
 	"openDL/download"
+	"openDL/i18n"
 	"openDL/pathrec"
 	"openDL/signature"
 	"openDL/style"
@@ -47,10 +48,37 @@ type d1Palette struct {
 	ok, bad, page      ui.Color
 }
 
-// d1Light/d1Dark 是共享 Radix 令牌到模板组件的兼容适配。
-func d1Light() *d1Palette { return d1AccentPalette(false, "") }
+// d1ThemeSet 是一套基础 palette 与其 MyGo 主题；两者都不可变，供共享。
+type d1ThemeSet struct {
+	palette *d1Palette
+	theme   *ui.Theme
+}
 
-func d1AccentPalette(dark bool, accent string) *d1Palette {
+var (
+	themeBaseMu sync.Mutex
+	themeBase   = map[string][2]d1ThemeSet{}
+)
+
+// themeBaseSet 返回强调色对应的基础亮/暗配色。构建含色阶混合与白字压暗
+// 循环，代价高，按强调色缓存；调用方只读不改。
+func themeBaseSet(accent string) (light, night d1ThemeSet) {
+	themeBaseMu.Lock()
+	defer themeBaseMu.Unlock()
+	if pair, ok := themeBase[accent]; ok {
+		return pair[0], pair[1]
+	}
+	build := func(dark bool) d1ThemeSet {
+		p := buildD1Palette(dark, accent)
+		return d1ThemeSet{palette: p, theme: p.theme()}
+	}
+	light, night = build(false), build(true)
+	themeBase[accent] = [2]d1ThemeSet{light, night}
+	return light, night
+}
+
+// buildD1Palette 把 Radix 令牌投影为模板组件配色的基础构建；
+// 只被 themeBaseSet 调用，避免缓存锁内递归。
+func buildD1Palette(dark bool, accent string) *d1Palette {
 	c := style.NewAccentRules(dark, accent).Colors
 	return &d1Palette{
 		dark: dark, accent: accent,
@@ -61,13 +89,48 @@ func d1AccentPalette(dark bool, accent string) *d1Palette {
 	}
 }
 
+// d1Light/d1Dark 是共享 Radix 令牌到模板组件的兼容适配。
+func d1Light() *d1Palette { return d1AccentPalette(false, "") }
+
+func d1AccentPalette(dark bool, accent string) *d1Palette {
+	light, night := themeBaseSet(accent)
+	if dark {
+		return night.palette
+	}
+	return light.palette
+}
+
 func d1Dark() *d1Palette { return d1AccentPalette(true, "") }
 
 func (p *d1Palette) theme() *ui.Theme { return style.NewAccentRules(p.dark, p.accent).Theme() }
 
+// themeBlend 缓存一次主题过渡的混合结果。
+type themeBlend struct {
+	dark    bool
+	accent  string
+	amount  float32
+	palette *d1Palette
+	theme   *ui.Theme
+}
+
+var (
+	themeBlendMu sync.Mutex
+	themeBlendOK *themeBlend
+)
+
 // themePalette blends the two appearances without rebuilding window content.
+// 混合结果按（深浅、强调色、量化过渡值）缓存：过渡动画逐帧推进缓存，
+// 静止后逐帧命中，不再每帧重建两套 palette 并 Mix 十几种颜色。
 func themePalette(dark bool, accent string, amount float32) (*d1Palette, *ui.Theme) {
-	light, night := d1AccentPalette(false, accent), d1AccentPalette(true, accent)
+	quantized := float32(math.Round(float64(amount)*256)) / 256
+	themeBlendMu.Lock()
+	if cached := themeBlendOK; cached != nil && cached.dark == dark && cached.accent == accent && cached.amount == quantized {
+		themeBlendMu.Unlock()
+		return cached.palette, cached.theme
+	}
+	themeBlendMu.Unlock()
+	lightSet, nightSet := themeBaseSet(accent)
+	light, night := lightSet.palette, nightSet.palette
 	p := *light
 	p.dark = dark
 	p.bg, p.fg = light.bg.Mix(night.bg, amount), light.fg.Mix(night.fg, amount)
@@ -78,7 +141,7 @@ func themePalette(dark bool, accent string, amount float32) (*d1Palette, *ui.The
 	p.pri, p.onpri = light.pri.Mix(night.pri, amount), light.onpri.Mix(night.onpri, amount)
 	p.brand, p.ok = light.brand.Mix(night.brand, amount), light.ok.Mix(night.ok, amount)
 	p.bad, p.page = light.bad.Mix(night.bad, amount), light.page.Mix(night.page, amount)
-	a, b := light.theme(), night.theme()
+	a, b := lightSet.theme, nightSet.theme
 	t := *a
 	t.Dark = dark
 	t.Background, t.Surface = a.Background.Mix(b.Background, amount), a.Surface.Mix(b.Surface, amount)
@@ -91,7 +154,11 @@ func themePalette(dark bool, accent string, amount float32) (*d1Palette, *ui.The
 	t.Selection, t.Focus = a.Selection.Mix(b.Selection, amount), a.Focus.Mix(b.Focus, amount)
 	t.Inverse, t.InverseText = a.Inverse.Mix(b.Inverse, amount), a.InverseText.Mix(b.InverseText, amount)
 	t.Scrollbar = a.Scrollbar.Mix(b.Scrollbar, amount)
-	return &p, &t
+	result := &themeBlend{dark: dark, accent: accent, amount: quantized, palette: &p, theme: &t}
+	themeBlendMu.Lock()
+	themeBlendOK = result
+	themeBlendMu.Unlock()
+	return result.palette, result.theme
 }
 
 // 状态徽章的着色：一律中性描边，仅“失败”以文字着色提示处理
@@ -167,6 +234,8 @@ type mainPage struct {
 	proxyJob                            uint64
 	settingsWrites                      chan appPreferences
 	settingsDone                        chan struct{}
+	ioWrites                            chan func() error
+	ioDone                              chan struct{}
 	defaultDirPending                   bool
 	defaultConnsPending                 bool
 	showColumns, showAbout              bool
@@ -187,12 +256,13 @@ type mainPage struct {
 	checked        map[string]bool
 	nav            int
 	navList        ui.Handle
-	navRows        []ui.Handle
+	navRows        map[string]*ui.Handle
 	sidebarBox     ui.Handle
 	tab            int // 详情页签：0 分段 1 信息 2 速度 3 请求头 4 日志
 	query          string
 	focus          string
 	status         string
+	statusArgs     []any
 	statusAt       time.Time
 
 	addWasOpen                                             bool
@@ -235,6 +305,7 @@ type mainPage struct {
 	dateFilter                                               string
 	showTypeMenu                                             bool
 	sortDesc                                                 bool
+	taskList                                                 ui.ListState
 	taskScroll                                               ui.ScrollState
 	taskDragID, taskDragName                                 string
 	taskDragPreview                                          []string
@@ -263,7 +334,11 @@ type mainPage struct {
 	clipOn      bool
 	clipLast    string
 	fileMissing map[string]bool // 已完成任务的本地文件被清理；仅在界面线程读写
-	quotaWarned bool
+	quotaWarned bool            // 流量配额提示去重；与 histMu 同步读写
+
+	redrawMu      sync.Mutex
+	redrawLast    time.Time
+	redrawPending bool
 
 	tray     *mygo.Tray
 	quitting bool
@@ -320,18 +395,54 @@ func navCategoryIcon(idx int) string {
 	return "file"
 }
 
-// navRow 返回索引对应的导航行句柄，按需扩展容量。
-func (pg *mainPage) navRow(idx int) *ui.Handle {
-	for len(pg.navRows) <= idx {
-		pg.navRows = append(pg.navRows, ui.Handle{})
+// navKeys 返回与 navLabels 平行的稳定身份：固定视图用名称，自定义队列用
+// 队列 id，内置分类用图标键，自定义分类用名称；增删条目不移动既有身份。
+func navKeys() []string {
+	keys := make([]string, 0, len(d1NavLabels)+len(activeCustomQueues)+len(activeCustomCategories))
+	for _, label := range d1NavLabels[:7] {
+		keys = append(keys, "nav-view:"+label)
 	}
-	return &pg.navRows[idx]
+	for _, spec := range activeCustomQueues {
+		keys = append(keys, "nav-queue:"+spec.ID)
+	}
+	for _, kind := range builtinCategoryKinds {
+		keys = append(keys, "nav-cat:"+kind)
+	}
+	for _, spec := range activeCustomCategories {
+		keys = append(keys, "nav-custom:"+spec.Label)
+	}
+	return keys
 }
 
-// navRowsFor 扩展容量并返回前 n 个导航行句柄。
-func (pg *mainPage) navRowsFor(n int) []ui.Handle {
-	pg.navRow(n - 1)
-	return pg.navRows[:n]
+// navKey 返回单个导航项的稳定身份。
+func navKey(idx int) string {
+	keys := navKeys()
+	if idx >= 0 && idx < len(keys) {
+		return keys[idx]
+	}
+	return "nav:" + strconv.Itoa(idx)
+}
+
+// navRow 返回稳定身份对应的导航行句柄。
+func (pg *mainPage) navRow(key string) *ui.Handle {
+	if pg.navRows == nil {
+		pg.navRows = map[string]*ui.Handle{}
+	}
+	if handle, ok := pg.navRows[key]; ok {
+		return handle
+	}
+	handle := &ui.Handle{}
+	pg.navRows[key] = handle
+	return handle
+}
+
+// navRowsFor 返回稳定身份顺序对应的行句柄，供滑块与悬停取几何。
+func (pg *mainPage) navRowsFor(keys []string) []ui.Handle {
+	rows := make([]ui.Handle, len(keys))
+	for i, key := range keys {
+		rows[i] = *pg.navRow(key)
+	}
+	return rows
 }
 
 var d1TabLabels = []string{"概览", "分段", "请求头", "日志"}
@@ -417,6 +528,9 @@ func (pg *mainPage) startWindow() {
 	pg.settingsWrites = make(chan appPreferences, 1)
 	pg.settingsDone = make(chan struct{})
 	go pg.settingsWatch()
+	pg.ioWrites = make(chan func() error, 16)
+	pg.ioDone = make(chan struct{})
+	go pg.ioWatch()
 	if fileIconsAvailable {
 		pg.fileIcons = map[string]*ui.Bitmap{}
 		pg.fileIconRequests = make(chan fileIconRequest, 32)
@@ -500,22 +614,64 @@ func (pg *mainPage) onChange() {
 		}
 	}
 	finishAction.consider(anyCompleted, !active, pg.queueFinished)
-	if exhausted := pg.mgr.QuotaExhausted(); exhausted != pg.quotaWarned {
-		pg.quotaWarned = exhausted
-		if exhausted && pg.win != nil {
-			pg.win.Update(func() {
-				select {
-				case <-pg.stop:
-					return
-				default:
-					pg.flash(tr("流量配额已用完，将在下个周期恢复"))
-				}
-			})
-		}
+	// quotaWarned 与 hist/logs/prev 同属引擎线程共享状态，统一由 histMu 保护。
+	pg.histMu.Lock()
+	exhausted := pg.mgr.QuotaExhausted()
+	quotaChanged := exhausted != pg.quotaWarned
+	pg.quotaWarned = exhausted
+	pg.histMu.Unlock()
+	if quotaChanged && exhausted && pg.win != nil {
+		pg.win.Update(func() {
+			select {
+			case <-pg.stop:
+				return
+			default:
+				pg.flash("流量配额已用完，将在下个周期恢复")
+			}
+		})
 	}
-	if pg.svc != nil {
+	pg.requestRedraw()
+}
+
+// redrawThrottle 是全窗重绘的合并窗口。
+const redrawThrottle = 250 * time.Millisecond
+
+// requestRedraw 合并引擎高频状态变化触发的全窗重绘：窗口内只在末尾补一次，
+// 首个请求立即生效。节流只在 UI 侧做，引擎回调不改。
+func (pg *mainPage) requestRedraw() {
+	if pg.svc == nil {
+		return
+	}
+	pg.redrawMu.Lock()
+	now := time.Now()
+	wait := redrawThrottle - now.Sub(pg.redrawLast)
+	if wait <= 0 {
+		pg.redrawLast = now
+		pg.redrawPending = false
+		pg.redrawMu.Unlock()
 		pg.svc.Invalidate()
+		return
 	}
+	if pg.redrawPending {
+		pg.redrawMu.Unlock()
+		return
+	}
+	pg.redrawPending = true
+	pg.redrawMu.Unlock()
+	time.AfterFunc(wait, func() {
+		pg.redrawMu.Lock()
+		pg.redrawPending = false
+		pg.redrawLast = time.Now()
+		pg.redrawMu.Unlock()
+		if pg.stop != nil {
+			select {
+			case <-pg.stop:
+				return
+			default:
+			}
+		}
+		pg.svc.Invalidate()
+	})
 }
 
 func d1StateLabel(s download.State) string {
@@ -548,11 +704,14 @@ func (pg *mainPage) view(c *ui.Context) {
 		pg.extracting = false
 	}
 	pg.addWasOpen = pg.showAdd
+	// 一次构建只计算一次行快照并向下传参，避免重复重建与排序。
+	all := pg.allRows()
+	rows := pg.filterRows(all)
 	// Keep active-row actions on visible results; checked selections remain
 	// across filters and are explicitly counted in the filter bar.
 	if pg.sel != "" {
 		visible := false
-		for _, r := range pg.visibleRows() {
+		for _, r := range rows {
 			if r.id == pg.sel {
 				visible = true
 				break
@@ -610,9 +769,9 @@ func (pg *mainPage) view(c *ui.Context) {
 		// 工具栏移入内容列（与表格同宽），左侧栏从标题栏下沿一直到顶。
 		w, _ := c.Size()
 		collapsiblePanelSplit(c, p, "sidebar-split", &pg.panes.Left, 180, min(float32(480), w-480), pg.sidebarReveal,
-			func() { pg.sidebar(c, p) }, func() { pg.content(c, p) }, pg.panelLayoutChanged).
+			func() { pg.sidebar(c, p, all) }, func() { pg.content(c, p, rows, all) }, pg.panelLayoutChanged).
 			Grow(1).Shrink(1).Basis(0).FillWidth()
-		pg.statusBar(c, p)
+		pg.statusBar(c, p, all)
 	})
 
 	if pg.showAdd && pg.win == nil {
@@ -733,7 +892,7 @@ func (pg *mainPage) sidebarToggle(c *ui.Context, p *d1Palette) {
 
 // ── 工具栏（46px） ──────────────────────────────────────────────────────
 
-func (pg *mainPage) toolbar(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) toolbar(c *ui.Context, p *d1Palette, all []d1Row) {
 	// 可用宽度与任务表一致；窄窗口的次要操作和筛选保留在应用菜单。
 	avail := pg.taskViewportWidth(c)
 	compact := avail < 1280
@@ -747,17 +906,17 @@ func (pg *mainPage) toolbar(c *ui.Context, p *d1Palette) {
 		pg.sidebarToggle(c, p)
 		if !tiny {
 			d1Sep(c, p)
-			d1IconButton(c, p, "play").Label(tr("全部开始")).Tooltip(tr("全部开始")).Disabled(!pg.hasResumableTask()).OnClick(pg.startAllTasks)
-			d1IconButton(c, p, "pause").Label(tr("全部暂停")).Tooltip(tr("全部暂停")).Disabled(!pg.hasActive() && !pg.nightOn).OnClick(pg.pauseAllTasks)
+			d1IconButton(c, p, "play").Label(tr("全部开始")).Tooltip(tr("全部开始")).Disabled(!pg.hasResumableTaskIn(all)).OnClick(pg.startAllTasks)
+			d1IconButton(c, p, "pause").Label(tr("全部暂停")).Tooltip(tr("全部暂停")).Disabled(!pg.hasActiveIn(all) && !pg.nightOn).OnClick(pg.pauseAllTasks)
 			d1Sep(c, p)
 		}
 		if !compact {
 			d1Button(c, p, "站点抓取", "globe").OnClick(func() { pg.openAdd(true) })
 		}
 		if !tiny {
-			d1Button(c, p, "清理已完成", "list-checks", pg.hasCompleted()).OnClick(pg.clearCompleted)
+			d1Button(c, p, "清理已完成", "list-checks", pg.hasCompletedIn(all)).OnClick(pg.clearCompleted)
 		} else {
-			d1SelectionAction(c, p, "清理已完成", "list-checks", p.mu, pg.hasCompleted()).OnClick(pg.clearCompleted)
+			d1SelectionAction(c, p, "清理已完成", "list-checks", p.mu, pg.hasCompletedIn(all)).OnClick(pg.clearCompleted)
 		}
 		if !compact {
 			d1Button(c, p, "计划任务", "clock").OnClick(pg.openSchedule)
@@ -932,9 +1091,15 @@ func (pg *mainPage) allRows() []d1Row {
 }
 
 func (pg *mainPage) visibleRows() []d1Row {
+	return pg.filterRows(pg.allRows())
+}
+
+// filterRows 对一份 allRows 快照做视图、筛选与搜索过滤并排序；一次构建
+// 只调用一次，结果向下传参。
+func (pg *mainPage) filterRows(all []d1Row) []d1Row {
 	q := strings.ToLower(strings.TrimSpace(pg.query))
 	var out []d1Row
-	for _, r := range pg.allRows() {
+	for _, r := range all {
 		if !pg.rowMatchesNav(r) || !pg.matchesFilters(r) {
 			continue
 		}
@@ -1036,13 +1201,13 @@ func (pg *mainPage) rowStatus(r d1Row) string {
 
 func (pg *mainPage) rowQueue(r d1Row) string {
 	if r.pending {
-		return tr("夜间 ") + pg.nightAt
+		return i18n.F("夜间 %s", pg.nightAt)
 	}
 	if isCustomQueue(r.snap.Queue) {
 		return customQueueName(r.snap.Queue)
 	}
 	if r.snap.Queue == "night" {
-		return tr("夜间 ") + pg.nightAt
+		return i18n.F("夜间 %s", pg.nightAt)
 	}
 	return tr("主队列")
 }
@@ -1104,7 +1269,12 @@ func (pg *mainPage) rowAdded(r d1Row) string {
 }
 
 func (pg *mainPage) selectedRow() (d1Row, bool) {
-	for _, r := range pg.allRows() {
+	return pg.selectedRowIn(pg.allRows())
+}
+
+// selectedRowIn 从一份行快照中找当前选中行；构建期传入本帧快照。
+func (pg *mainPage) selectedRowIn(all []d1Row) (d1Row, bool) {
+	for _, r := range all {
 		if r.id == pg.sel {
 			return r, true
 		}
@@ -1130,10 +1300,10 @@ func (pg *mainPage) selection() []d1Row {
 
 // ── 侧栏（220px） ───────────────────────────────────────────────────────
 
-func (pg *mainPage) sidebar(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) sidebar(c *ui.Context, p *d1Palette, all []d1Row) {
 	root := ui.Column(c).Fill().Padding(10, 8).Background(p.card).Bind(&pg.sidebarBox)
 	root.Children(func() {
-		rows := pg.allRows()
+		rows := all
 		running, queued, done, failed := 0, 0, 0, 0
 		queueRunning := map[string]int{}
 		for _, r := range rows {
@@ -1186,7 +1356,7 @@ func (pg *mainPage) sidebar(c *ui.Context, p *d1Palette) {
 		ui.Scroll(c).Grow(1).Shrink(1).Basis(0).FillWidth().Children(func() {
 			c.Key("main-nav-list")
 			labels := navLabels()
-			rows := pg.navRowsFor(len(labels))
+			rows := pg.navRowsFor(navKeys())
 			list := ui.Column(c).FillWidth().Bind(&pg.navList)
 			var selected *ui.Handle
 			if pg.nav >= 0 && pg.nav < len(rows) {
@@ -1239,10 +1409,10 @@ func (pg *mainPage) navItem(c *ui.Context, p *d1Palette, idx int, icon, count st
 	if idx < 7 || (idx >= 7+len(activeCustomQueues) && idx < 7+len(activeCustomQueues)+len(builtinCategoryKinds)) {
 		label = tr(label)
 	}
-	c.Key("nav:" + strconv.Itoa(idx))
+	c.Key(navKey(idx))
 	// 尾边距让开纵向滚动条：滑块贴在容器右缘内 3px、宽 6px，行内容再留间距。
 	row := ui.ButtonBase(c).FillWidth().Padding(6, 14, 6, 8).Gap(8).AlignItems(ui.Center).Justify(ui.Start).Radius(style.RadiusSM).
-		Margin(0, 0, style.NavItemGap, 0).Label(label).Role(ui.RoleToggleButton).Checked(on).Cursor(ui.CursorPointer).Bind(pg.navRow(idx))
+		Margin(0, 0, style.NavItemGap, 0).Label(label).Role(ui.RoleToggleButton).Checked(on).Cursor(ui.CursorPointer).Bind(pg.navRow(navKey(idx)))
 	navMotion(row, p, on, slide)
 	row.Children(func() {
 		ic, tx := p.mu, p.mu
@@ -1305,8 +1475,8 @@ func (pg *mainPage) diskStatusControl(c *ui.Context, p *d1Palette) {
 				}
 				ui.Text(c, tr(stat.name)).FontSize(style.TextSM).TextColor(nameColor).SingleLine()
 				ui.Text(c, label).FontSize(style.TextSM).FontWeight(style.WeightMedium).FontFeatures("tnum").
-					TextColor(valueColor).SingleLine().Tooltip(tr(stat.name) + "：" + tip)
-				bar := ui.Box(c).Width(28).Height(4).MarginStart(2).Tooltip(tr(stat.name) + "：" + tip)
+					TextColor(valueColor).SingleLine().Tooltip(tr(stat.name) + tr("：") + tip)
+				bar := ui.Box(c).Width(28).Height(4).MarginStart(2).Tooltip(tr(stat.name) + tr("：") + tip)
 				fraction := bar.Animate("disk-used", float32(pct)/100, 500*time.Millisecond)
 				bar.Draw(func(pnt *ui.Painter, r ui.Rect) {
 					pnt.Fill(r, p.bd, 2)
@@ -1337,36 +1507,36 @@ func diskFreeLabel(free int64) string {
 
 // ── 右侧内容：任务表 + 详情面板 ────────────────────────
 
-func (pg *mainPage) content(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) content(c *ui.Context, p *d1Palette, rows, all []d1Row) {
 	if pg.rightDetailOpen() {
 		contentWidth := pg.contentWidth(c)
 		panelSplit(c, p, "right-detail-split", &pg.tablePaneWidth, 320, contentWidth-281,
-			func() { pg.taskColumn(c, p) }, func() { pg.detailPanel(c, p) }, func() {
+			func() { pg.taskColumn(c, p, rows, all) }, func() { pg.detailPanel(c, p, all) }, func() {
 				pg.panes.Right = clampPanel(contentWidth-1-pg.tablePaneWidth, 280, contentWidth-321)
 				pg.tablePaneWidth = contentWidth - 1 - pg.panes.Right
 				pg.panelLayoutChanged()
 			}).Fill()
 		return
 	}
-	pg.taskColumn(c, p)
+	pg.taskColumn(c, p, rows, all)
 }
 
-func (pg *mainPage) taskColumn(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) taskColumn(c *ui.Context, p *d1Palette, rows, all []d1Row) {
 	c.Key("task-pane")
 	ui.Column(c).Fill().Children(func() {
-		pg.toolbar(c, p)
+		pg.toolbar(c, p, all)
 		if !pg.detailCollapsed && pg.detailPlacement != "right" {
 			areaHeight := pg.tableAreaHeight(c)
 			panelSplitVertical(c, p, "bottom-detail-split", &pg.tablePaneHeight, 150, areaHeight-141, func() {
-				ui.Column(c).Fill().Children(func() { pg.table(c, p, pg.visibleRows()) })
-			}, func() { pg.detailPanel(c, p) }, func() {
+				ui.Column(c).Fill().Children(func() { pg.table(c, p, rows, all) })
+			}, func() { pg.detailPanel(c, p, all) }, func() {
 				pg.panes.Bottom = clampPanel(areaHeight-1-pg.tablePaneHeight, 140, areaHeight-151)
 				pg.tablePaneHeight = areaHeight - 1 - pg.panes.Bottom
 				pg.panelLayoutChanged()
 			}).Grow(1).Shrink(1).Basis(0).FillWidth()
 			return
 		}
-		pg.table(c, p, pg.visibleRows())
+		pg.table(c, p, rows, all)
 	})
 }
 
@@ -1441,10 +1611,10 @@ func d1FileSlot(c *ui.Context, p *d1Palette, r d1Row, bitmap *ui.Bitmap, on, rev
 }
 
 // contextMenu 是任务右键菜单（JS: .menu）。
-func (pg *mainPage) contextMenu(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) contextMenu(c *ui.Context, p *d1Palette, all []d1Row) {
 	var row d1Row
 	found := false
-	for _, r := range pg.allRows() {
+	for _, r := range all {
 		if r.id == pg.menuRow {
 			row, found = r, true
 		}
@@ -1460,9 +1630,8 @@ func (pg *mainPage) contextMenu(c *ui.Context, p *d1Palette) {
 			pg.showMenu = false
 		}
 		dim.Children(func() {
-			menu := ui.Column(c).Width(230).Absolute().Left(max(4, min(pg.menuX, w-234))).Top(max(4, min(pg.menuY, h-340))).
-				Padding(4).Radius(8).Border(1, p.bd2).Background(p.bg).
-				Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, 0.14))
+			menu := style.ShadowOverlay(ui.Column(c).Width(230).Absolute().Left(max(4, min(pg.menuX, w-234))).Top(max(4, min(pg.menuY, h-340))).
+				Padding(4).Radius(style.RadiusMD).Border(1, p.bd2).Background(p.bg))
 			menu.Role(ui.RoleMenu).FocusGroup(ui.Vertical).Children(func() {
 				if menu.OverlayShortcut(0, ui.KeyEscape) {
 					pg.showMenu = false
@@ -1501,6 +1670,14 @@ func (pg *mainPage) taskMenuBody(c *ui.Context, p *d1Palette, row d1Row, withPro
 		pg.copyDownloadURL(row.rowURL())
 		dismiss()
 	})
+	pg.d1MenuIconItem(c, p, "copy", "复制文件名", p.fg, func() {
+		pg.copyRowText(row.rowName())
+		dismiss()
+	})
+	pg.d1MenuIconItem(c, p, "folder", "复制路径", p.fg, func() {
+		pg.copyRowText(row.snap.FilePath)
+		dismiss()
+	}, !row.pending && row.snap.FilePath != "")
 	pg.d1MenuIconItem(c, p, "redo", "重新下载", p.fg, func() { pg.redownload(row); dismiss() })
 	if signature.Available {
 		pg.d1MenuIconItem(c, p, "check", "验证文件数字签名", p.fg, func() { pg.verifyFileSignature(row); dismiss() }, !row.pending && row.snap.State == download.Done && !row.snap.Verifying)
@@ -1515,7 +1692,7 @@ func (pg *mainPage) taskMenuBody(c *ui.Context, p *d1Palette, row d1Row, withPro
 	}, row.pending || row.snap.State != download.Done)
 	for _, spec := range activeCustomQueues {
 		queue := spec
-		pg.d1MenuIconItem(c, p, "layers", tr("移至 ")+queue.Name, p.fg, func() {
+		pg.d1MenuIconItemText(c, p, "move-queue:"+queue.ID, "layers", i18n.F("移至 %s", queue.Name), p.fg, func() {
 			pg.moveRowToQueue(row, queue.ID)
 			dismiss()
 		}, !row.pending && row.snap.State != download.Done && row.snap.Queue != queue.ID)
@@ -1536,8 +1713,12 @@ func (pg *mainPage) taskMenuBody(c *ui.Context, p *d1Palette, row d1Row, withPro
 }
 
 func (pg *mainPage) d1MenuIconItem(c *ui.Context, p *d1Palette, icon, label string, col ui.Color, act func(), enabled ...bool) {
-	c.Key(label)
-	b := ui.ButtonBase(c).Role(ui.RoleMenuItem).Label(tr(label)).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
+	pg.d1MenuIconItemText(c, p, label, icon, tr(label), col, act, enabled...)
+}
+
+func (pg *mainPage) d1MenuIconItemText(c *ui.Context, p *d1Palette, key, icon, label string, col ui.Color, act func(), enabled ...bool) {
+	c.Key(key)
+	b := ui.ButtonBase(c).Role(ui.RoleMenuItem).Label(label).FillWidth().Padding(6, 8).Radius(style.RadiusXXS).Cursor(ui.CursorPointer)
 	if b.Hovered() {
 		b.Background(p.hover)
 	}
@@ -1550,14 +1731,15 @@ func (pg *mainPage) d1MenuIconItem(c *ui.Context, p *d1Palette, icon, label stri
 	b.Children(func() {
 		ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 			d1Icon(c, icon, 16, col)
-			ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(col).Grow(1).Shrink(1).Basis(0).SingleLine()
+			ui.Text(c, label).FontSize(style.TextBase).TextColor(col).Grow(1).Shrink(1).Basis(0).SingleLine()
 		})
 	})
-	if b.Clicked() {
+	// 改集合的动作延迟到 OnClick：构建中执行会直接变更正在构建的集合。
+	b.OnClick(func() {
 		if act != nil {
 			act()
 		}
-	}
+	})
 }
 
 // ── 详情面板（.dp：页签 + 概览） ─────────────────────────────────────────
@@ -1630,8 +1812,8 @@ func (pg *mainPage) ovProgress(c *ui.Context, p *d1Palette, r d1Row) {
 		})
 	})
 	ui.Row(c).FillWidth().Justify(ui.SpaceBetween).Margin(10, 0, 0, 0).Children(func() {
-		ui.Text(c, tr(pg.rowDone(r)+" / "+pg.rowSize(r))).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
-		ui.Text(c, tr(pg.ovSpeedLine(r))).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
+		ui.Text(c, pg.rowDone(r)+" / "+pg.rowSize(r)).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
+		ui.Text(c, pg.ovSpeedLine(r)).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
 	})
 	// 分段胶囊推到列底，与图表 0 刻度线在同一水平线上。
 	ui.Box(c).Grow(1).Shrink(1).Basis(0)
@@ -1660,9 +1842,9 @@ func (pg *mainPage) ovSpeedLine(r d1Row) string {
 	case remain == "-":
 		return speed
 	case speed == "-":
-		return tr("剩余 ") + remain
+		return i18n.F("剩余 %s", remain)
 	}
-	return speed + tr("，剩余 ") + remain
+	return i18n.F("%s，剩余 %s", speed, remain)
 }
 
 // ovSegments 是连接级进度胶囊：按连接数量划分文件区间，每格显示该区间的完成度。
@@ -1687,12 +1869,17 @@ func (pg *mainPage) ovSegments(c *ui.Context, p *d1Palette, r d1Row) {
 	ui.Row(c).FillWidth().Gap(4).Margin(12, 0, 0, 0).Children(func() {
 		for i := 0; i < pills; i++ {
 			fraction := float32(pg.rowPct(r)) / 100
+			start := total/int64(pills)*int64(i) + total%int64(pills)*int64(i)/int64(pills)
 			if (r.pending || r.snap.State != download.Done) && total > 0 && len(r.snap.Segments) > 0 {
-				start := total/int64(pills)*int64(i) + total%int64(pills)*int64(i)/int64(pills)
 				end := total/int64(pills)*int64(i+1) + total%int64(pills)*int64(i+1)/int64(pills)
 				fraction = sliceCoverage(total, r.snap.Segments, start, end)
 			}
-			c.Key(i)
+			// 胶囊按所在文件区间取稳定身份，连接数变化时不丢动画状态。
+			key := "seg:" + strconv.FormatInt(start, 10)
+			if total <= 0 {
+				key = "seg:" + strconv.Itoa(i)
+			}
+			c.Key(key)
 			bar := ui.Box(c).Grow(1).Shrink(1).Basis(0).MinWidth(3).Height(8)
 			animated := bar.Animate("segment-progress", fraction, 700*time.Millisecond)
 			bar.Draw(func(pnt *ui.Painter, rr ui.Rect) {
@@ -1712,13 +1899,13 @@ func (pg *mainPage) ovChart(c *ui.Context, p *d1Palette, r d1Row, fill bool) {
 	if !r.pending {
 		elapsed = r.snap.Elapsed
 	}
-	pg.h4(c, p, tr("下载时长")+" "+durationText(elapsed), tr("峰值 ")+pg.peakText(r))
+	pg.h4(c, p, i18n.F("下载时长 %s", durationText(elapsed)), i18n.F("峰值 %s", pg.peakText(r)))
 	pg.chart(c, p, r, fill)
 }
 
 // ovInfo 是概览的任务信息区。
 func (pg *mainPage) ovInfo(c *ui.Context, p *d1Palette, r d1Row) {
-	pg.h4(c, p, "任务信息", "")
+	pg.h4(c, p, tr("任务信息"), "")
 	pg.kvList(c, p, pg.taskKV(r))
 }
 
@@ -1729,7 +1916,7 @@ func (pg *mainPage) segTab(c *ui.Context, p *d1Palette, r d1Row) {
 		if len(r.snap.Segments) > 0 && r.snap.Total > 0 {
 			label = "分段进度"
 		}
-		pg.h4(c, p, label, pg.rowDone(r)+" / "+pg.rowSize(r))
+		pg.h4(c, p, tr(label), pg.rowDone(r)+" / "+pg.rowSize(r))
 		ui.Text(c, pg.rowSpeed(r)).FontSize(style.TextSM).TextColor(p.fg).Margin(0, 0, 8, 0)
 		if r.snap.Total > 0 {
 			pg.blockMap(c, p, r)
@@ -1742,9 +1929,9 @@ func (pg *mainPage) segTab(c *ui.Context, p *d1Palette, r d1Row) {
 
 func (pg *mainPage) h4(c *ui.Context, p *d1Palette, left, right string) {
 	ui.Row(c).Margin(0, 0, 8, 0).Justify(ui.SpaceBetween).Children(func() {
-		ui.Text(c, tr(left)).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
+		ui.Text(c, left).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
 		if right != "" {
-			ui.Text(c, tr(right)).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
+			ui.Text(c, right).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
 		}
 	})
 }
@@ -1901,7 +2088,8 @@ func (pg *mainPage) connList(c *ui.Context, p *d1Palette, r d1Row) {
 		ui.Text(c, fmt.Sprintf(tr("活跃连接：%d，显示区间：%d"), active, len(segments))).FontSize(style.TextXS).TextColor(p.mu)
 		ui.Grid(c).Columns(2).Gap(6).Children(func() {
 			for i, segment := range segments {
-				c.Key(i)
+				// 连接卡片按区间起点取稳定身份，不随显示区间重排丢失状态。
+				c.Key("conn:" + strconv.FormatInt(segment.Start, 10))
 				fraction := float32(0)
 				if segment.End >= segment.Start {
 					fraction = min(float32(1), float32(max(segment.Downloaded, int64(0)))/float32(segment.End-segment.Start+1))
@@ -2095,7 +2283,7 @@ func (pg *mainPage) headersTab(c *ui.Context, p *d1Palette, r d1Row) {
 	if len(keys) == 0 {
 		rows = append(rows, [2]string{"请求头", tr("未配置额外请求头")})
 	}
-	ui.Column(c).Padding(14).Children(func() { pg.h4(c, p, "请求头", ""); pg.kvList(c, p, rows) })
+	ui.Column(c).Padding(14).Children(func() { pg.h4(c, p, tr("请求头"), ""); pg.kvList(c, p, rows) })
 }
 
 func (pg *mainPage) logTab(c *ui.Context, p *d1Palette, r d1Row) {
@@ -2149,10 +2337,10 @@ func d1StatusText(c *ui.Context, p *d1Palette, s string) ui.Element {
 		FontWeight(style.WeightRegular).TextColor(p.mu)
 }
 
-func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette, all []d1Row) {
 	var speed int64
 	running, queued := 0, 0
-	for _, r := range pg.allRows() {
+	for _, r := range all {
 		if r.pending {
 			queued++
 			continue
@@ -2197,10 +2385,10 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 		})
 		// 夜间队列开始时间（点击打开计划任务）；关闭时不显示。
 		if pg.nightOn {
-			nightText := tr("夜间队列 ") + pg.nightAt + tr(" 开始")
+			nightText := i18n.F("夜间队列 %s 开始", pg.nightAt)
 			night := ui.ButtonBase(c).Height(24).Padding(0, 4).Radius(4).Shrink(1).MinWidth(0).Label(tr("打开计划任务")).Cursor(ui.CursorPointer)
 			night.Children(func() {
-				ui.Text(c, tr(nightText)).Shrink(1).MinWidth(0).SingleLine().Tooltip(tr(nightText)).FontSize(style.TextSM).TextColor(p.mu)
+				ui.Text(c, nightText).Shrink(1).MinWidth(0).SingleLine().Tooltip(nightText).FontSize(style.TextSM).TextColor(p.mu)
 			})
 			if night.Clicked() {
 				pg.openSchedule()
@@ -2212,7 +2400,8 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette) {
 			progress := indicator.Animate("copy-status", 1, 160*time.Millisecond)
 			indicator.Children(func() { style.Icon(c, style.IconCheck, 16, p.pri).Scale(0.9+0.1*progress, 0.9+0.1*progress) })
 		} else if pg.status != "" && time.Since(pg.statusAt) < 5*time.Second {
-			ui.Text(c, tr(pg.status)).MarginStart(ui.Auto).Shrink(1).MinWidth(0).Role(ui.RoleStatus).FontSize(style.TextSM).FontWeight(style.WeightMedium).TextColor(p.fg).SingleLine().Tooltip(tr(pg.status))
+			status := pg.statusText()
+			ui.Text(c, status).MarginStart(ui.Auto).Shrink(1).MinWidth(0).Role(ui.RoleStatus).FontSize(style.TextSM).FontWeight(style.WeightMedium).TextColor(p.fg).SingleLine().Tooltip(status)
 		}
 		// 右侧：下载/排队数量、下载速度（文字与「N 个排队」同款字型）。
 		ui.Row(c).MarginStart(ui.Auto).Shrink(0).Gap(12).AlignItems(ui.Center).Children(func() {
@@ -2267,7 +2456,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 			ui.Column(c).FillWidth().Padding(10, 18, 4, 18).Gap(12).Children(func() {
 				ui.Column(c).Children(func() {
 					c.Key("d1links")
-					linksField := ui.TextArea(c, &pg.dlgLinks).Height(95).Padding(8, 10).FontSize(style.TextSM).LineHeight(1.6).Label(tr("下载链接")).FocusBind(&pg.focus, "d1links").Background(p.card).Border(1, p.bd).Radius(6)
+					linksField := ui.TextArea(c, &pg.dlgLinks).Height(95).Padding(8, 10).FontSize(style.TextSM).LineHeight(1.6).Label(tr("下载链接")).FocusBind(&pg.focus, "d1links").Background(p.card).Border(1, p.bd).Radius(style.RadiusSM)
 					if linksField.Focused() {
 						linksField.BorderColor(p.pri)
 					}
@@ -2324,7 +2513,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("保存到")).FontSize(style.TextSM).TextColor(p.mu)
 						ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
 							dirFocused := false
-							dirBox := ui.Row(c).Height(32).Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(6).Border(1, p.bd).Background(p.card).Grow(1).Shrink(1).Basis(0).MinWidth(0)
+							dirBox := ui.Row(c).Height(32).Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).Grow(1).Shrink(1).Basis(0).MinWidth(0)
 							dirBox.Children(func() {
 								d1Icon(c, "folder", 16, p.mu)
 								c.Key("download-dir")
@@ -2352,7 +2541,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 								})
 							})
 							c.Key("download-dir-browse")
-							browse := ui.ButtonBase(c).Height(32).Shrink(0).Padding(0, 8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("选择文件夹")).Tooltip(tr("选择文件夹")).Cursor(ui.CursorPointer)
+							browse := ui.ButtonBase(c).Height(32).Shrink(0).Padding(0, 8).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).Label(tr("选择文件夹")).Tooltip(tr("选择文件夹")).Cursor(ui.CursorPointer)
 							hoverMotion(browse, ui.Transparent, p.hover)
 							browse.Children(func() {
 								ui.Text(c, tr("选择文件夹")).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
@@ -2368,20 +2557,24 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("队列")).FontSize(style.TextSM).TextColor(p.mu)
 						c.Key("download-queue")
 						queue := ui.SelectBase(c, &pg.dlgQueue)
-						queue.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("队列")).Cursor(ui.CursorPointer).Children(func() {
-							d1Icon(c, "layers", 16, p.mu)
+						queue.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).Label(tr("队列")).Cursor(ui.CursorPointer).Children(func() {
+							d1Icon(c, pg.queueIcon(), 16, p.mu)
 							ui.Text(c, pg.queueLabel()).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
 							d1Icon(c, "chev", 16, p.mu)
 						})
 						queue.Popup(func(menu ui.Element) {
-							d1DropdownPanel(menu, p).Width(queue.Trigger.Bounds().W).Children(func() {
+							al := selectAlignState(menu)
+							dy := al.apply(c, queue.Trigger, pg.dlgQueue, len(pg.queueChoices()), 0)
+							d1DropdownPanel(menu, p).Top(dy).Width(queue.Trigger.Bounds().W).Children(func() {
 								for i, choice := range pg.queueChoices() {
-									item := queue.Item(i).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
+									item := queue.Item(i).FillWidth().Padding(6, 8).Gap(8).Radius(style.RadiusXXS).Justify(ui.Start).Cursor(ui.CursorPointer)
+									al.measure(i, pg.dlgQueue, item, menu)
 									if item.Highlighted() {
 										item.Background(p.hover)
 									}
-									label := choice.label
+									label, icon := choice.label, choice.icon
 									item.Children(func() {
+										d1Icon(c, icon, 16, p.mu)
 										ui.Text(c, label).Shrink(1).MinWidth(0).FontSize(style.TextBase).TextColor(p.fg).SingleLine().Tooltip(label)
 									})
 								}
@@ -2392,20 +2585,24 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("媒体下载")).FontSize(style.TextSM).TextColor(p.mu)
 						c.Key("download-media")
 						media := ui.SelectBase(c, &pg.dlgMedia)
-						media.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("媒体下载")).Cursor(ui.CursorPointer).Children(func() {
-							d1Icon(c, "film", 16, p.mu)
+						media.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).Label(tr("媒体下载")).Cursor(ui.CursorPointer).Children(func() {
+							d1Icon(c, mediaChoiceIcons()[pg.dlgMedia], 16, p.mu)
 							ui.Text(c, mediaChoices()[pg.dlgMedia]).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
 							d1Icon(c, "chev", 16, p.mu)
 						})
 						media.Popup(func(menu ui.Element) {
-							d1DropdownPanel(menu, p).Width(media.Trigger.Bounds().W).Children(func() {
+							al := selectAlignState(menu)
+							dy := al.apply(c, media.Trigger, pg.dlgMedia, len(mediaChoices()), 0)
+							d1DropdownPanel(menu, p).Top(dy).Width(media.Trigger.Bounds().W).Children(func() {
 								for i, label := range mediaChoices() {
-									item := media.Item(i).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
+									item := media.Item(i).FillWidth().Padding(6, 8).Gap(8).Radius(style.RadiusXXS).Justify(ui.Start).Cursor(ui.CursorPointer)
+									al.measure(i, pg.dlgMedia, item, menu)
 									if item.Highlighted() {
 										item.Background(p.hover)
 									}
-									name := label
+									name, icon := label, mediaChoiceIcons()[i]
 									item.Children(func() {
+										d1Icon(c, icon, 16, p.mu)
 										ui.Text(c, name).Shrink(1).MinWidth(0).FontSize(style.TextBase).TextColor(p.fg).SingleLine().Tooltip(name)
 									})
 								}
@@ -2418,15 +2615,18 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 						ui.Text(c, tr("画质上限")).FontSize(style.TextSM).TextColor(p.mu)
 						c.Key("download-quality")
 						quality := ui.SelectBase(c, &pg.dlgQuality)
-						quality.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(6).Border(1, p.bd).Background(p.card).Label(tr("画质上限")).Cursor(ui.CursorPointer).Children(func() {
+						quality.Trigger.FillWidth().Height(32).Padding(0, 10).Gap(8).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).Label(tr("画质上限")).Cursor(ui.CursorPointer).Children(func() {
 							d1Icon(c, "film", 16, p.mu)
 							ui.Text(c, mediaQualities()[pg.dlgQuality]).Grow(1).Shrink(1).Basis(0).FontSize(style.TextSM).TextColor(p.fg)
 							d1Icon(c, "chev", 16, p.mu)
 						})
 						quality.Popup(func(menu ui.Element) {
-							d1DropdownPanel(menu, p).Width(quality.Trigger.Bounds().W).Children(func() {
+							al := selectAlignState(menu)
+							dy := al.apply(c, quality.Trigger, pg.dlgQuality, len(mediaQualities()), 0)
+							d1DropdownPanel(menu, p).Top(dy).Width(quality.Trigger.Bounds().W).Children(func() {
 								for i, label := range mediaQualities() {
-									item := quality.Item(i).FillWidth().Padding(6, 8).Radius(5).Cursor(ui.CursorPointer)
+									item := quality.Item(i).FillWidth().Padding(6, 8).Radius(style.RadiusXXS).Cursor(ui.CursorPointer)
+									al.measure(i, pg.dlgQuality, item, menu)
 									if item.Highlighted() {
 										item.Background(p.hover)
 									}
@@ -2443,7 +2643,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 					ui.Column(c).Gap(5).Children(func() {
 						ui.Text(c, tr("每个任务的连接数")).FontSize(style.TextSM).TextColor(p.mu)
 						ui.RadioGroup(c, func() {
-							segments := ui.Row(c).FillWidth().Padding(2).Gap(2).Radius(6).Border(1, p.bd).Background(p.card)
+							segments := ui.Row(c).FillWidth().Padding(2).Gap(2).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card)
 							position := segmentedSlide(segments, pg.dlgSeg, len(connectionOptions), 2, 2, 5, p.pri)
 							segments.Children(func() {
 								for i, count := range connectionOptions {
@@ -2452,7 +2652,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 										label = "自动"
 									}
 									c.Key(label)
-									segment := ui.RadioBase(c, &pg.dlgSeg, i).Grow(1).Shrink(1).Basis(0).Padding(4, 0).Radius(5).Center().Label(fmt.Sprintf(tr("%s 个连接"), label)).Cursor(ui.CursorPointer)
+									segment := ui.RadioBase(c, &pg.dlgSeg, i).Grow(1).Shrink(1).Basis(0).Padding(4, 0).Radius(style.RadiusXXS).Center().Label(fmt.Sprintf(tr("%s 个连接"), label)).Cursor(ui.CursorPointer)
 									weight := max(float32(0), 1-float32(math.Abs(float64(position.x-float32(i)))))
 									col := p.mu.Mix(p.onpri, weight)
 									segment.Children(func() { ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(col) })
@@ -2507,7 +2707,7 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 }
 
 func d1Check(c *ui.Context, p *d1Palette, on *bool, label string) ui.Element {
-	box := ui.CheckboxBase(c, on).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Radius(5).Label(tr(label)).Cursor(ui.CursorPointer)
+	box := ui.CheckboxBase(c, on).Gap(8).Justify(ui.Start).AlignItems(ui.Center).Radius(style.RadiusXS).Label(tr(label)).Cursor(ui.CursorPointer)
 	box.Children(func() {
 		d1CheckMark(c, p, *on)
 		ui.Text(c, tr(label)).FontSize(style.TextBase).TextColor(p.fg)
@@ -2517,8 +2717,8 @@ func d1Check(c *ui.Context, p *d1Palette, on *bool, label string) ui.Element {
 
 func (pg *mainPage) schedDialog(c *ui.Context, p *d1Palette) {
 	ui.DialogBase(c, &pg.showSched, func(back, panel ui.Element) {
-		back.Background(ui.RGBA(0, 0, 0, .42))
-		panel.Width(420).Padding(18).Radius(8).Border(1, p.bd2).Background(p.bg).Label(tr("计划任务")).Shadow(0, 8, 24, 0, ui.RGBA(0, 0, 0, .14))
+		back.Background(style.DimOverlayColor)
+		style.ShadowOverlay(panel.Width(420).Padding(18).Radius(style.RadiusMD).Border(1, p.bd2).Background(p.bg).Label(tr("计划任务")))
 		ui.Column(c).Gap(12).Children(func() {
 			ui.Text(c, tr("计划任务")).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
 			ui.Text(c, tr("夜间队列按本机时间启动，主队列等待任务不受影响")).FontSize(style.TextSM).TextColor(p.mu)
@@ -2562,7 +2762,7 @@ func (pg *mainPage) schedDialog(c *ui.Context, p *d1Palette) {
 					pg.nightOn = pg.dlgScheduleOn
 					pg.saveAppPreferences()
 					pg.showSched = false
-					pg.flash(tr("计划任务已保存"))
+					pg.flash("计划任务已保存")
 				})
 			})
 		})
@@ -2612,6 +2812,12 @@ func mediaChoices() []string {
 	return []string{tr("普通下载"), mediaModeLabel("hls-ts"), mediaModeLabel("dash-fmp4")}
 }
 
+// mediaChoiceIcons 是媒体下载方式的图标键，索引与 mediaChoices 对应：
+// 普通下载为单文件直下，HLS 传输流取广播信号，DASH 取封装影像。
+func mediaChoiceIcons() []string {
+	return []string{"download", "rss", "film"}
+}
+
 // mediaModeIDs 把对话框选择映射到请求的媒体模式。
 func mediaModeIDs() []string { return []string{"", "hls-ts", "dash-fmp4"} }
 
@@ -2625,13 +2831,13 @@ func mediaQualities() []string {
 func mediaQualityIDs() []string { return []string{"", "360", "480", "720", "1080", "1440", "2160"} }
 
 // queueChoice 是添加下载对话框里的一个队列选项。
-type queueChoice struct{ queue, label string }
+type queueChoice struct{ queue, label, icon string }
 
 // queueChoices 返回队列选项：主队列、夜间队列、自定义队列。
 func (pg *mainPage) queueChoices() []queueChoice {
-	choices := []queueChoice{{"", tr("主队列")}, {"night", tr("夜间队列")}}
+	choices := []queueChoice{{"", tr("主队列"), "layers"}, {"night", tr("夜间队列"), "orbit"}}
 	for _, spec := range activeCustomQueues {
-		choices = append(choices, queueChoice{spec.ID, spec.Name})
+		choices = append(choices, queueChoice{spec.ID, spec.Name, "layers"})
 	}
 	return choices
 }
@@ -2654,12 +2860,21 @@ func (pg *mainPage) queueLabel() string {
 	return choices[pg.dlgQueue].label
 }
 
+// queueIcon 返回对话框当前选择的队列图标。
+func (pg *mainPage) queueIcon() string {
+	choices := pg.queueChoices()
+	if pg.dlgQueue < 0 || pg.dlgQueue >= len(choices) {
+		return choices[0].icon
+	}
+	return choices[pg.dlgQueue].icon
+}
+
 // queueIsNight 报告对话框当前是否选择夜间队列。
 func (pg *mainPage) queueIsNight() bool { return pg.queueID() == "night" }
 
 func (pg *mainPage) addLinks(links []string, queue string) {
 	if len(links) == 0 {
-		pg.flash(tr("没有可添加的链接"))
+		pg.flash("没有可添加的链接")
 		return
 	}
 	first := ""
@@ -2672,7 +2887,7 @@ func (pg *mainPage) addLinks(links []string, queue string) {
 				first = id
 			}
 			pg.histMu.Lock()
-			pg.logs[id] = append(pg.logs[id], time.Now().Format("15:04:05")+tr("  已加入")+tr("夜间队列"))
+			pg.logs[id] = append(pg.logs[id], time.Now().Format("15:04:05")+i18n.F("  已加入%s", tr("夜间队列")))
 			pg.histMu.Unlock()
 			continue
 		}
@@ -2685,19 +2900,19 @@ func (pg *mainPage) addLinks(links []string, queue string) {
 		if first == "" {
 			first = id
 		}
-		label := "主队列"
+		label := tr("主队列")
 		if isCustomQueue(queue) {
 			label = customQueueName(queue)
 		}
 		pg.histMu.Lock()
-		pg.logs[id] = append(pg.logs[id], time.Now().Format("15:04:05")+tr("  已加入")+label)
+		pg.logs[id] = append(pg.logs[id], time.Now().Format("15:04:05")+i18n.F("  已加入%s", label))
 		pg.histMu.Unlock()
 	}
 	// 提交后定位首个新任务，结果一眼可见。
 	if first != "" {
 		pg.sel = first
 	}
-	pg.flash(fmt.Sprintf(tr("已添加 %d 个任务"), len(links)))
+	pg.flash("已添加 %d 个任务", len(links))
 }
 
 func (pg *mainPage) toggleRow(r d1Row) {
@@ -2707,7 +2922,7 @@ func (pg *mainPage) toggleRow(r d1Row) {
 				if r.snap.Err != "" {
 					pg.flash(r.snap.Err)
 				} else {
-					pg.flash(tr("任务正在暂停，请稍后重试"))
+					pg.flash("任务正在暂停，请稍后重试")
 				}
 			}
 			return
@@ -2729,7 +2944,7 @@ func (pg *mainPage) toggleRow(r d1Row) {
 	switch r.snap.State {
 	case download.Running, download.Queued:
 		pg.mgr.Cancel(r.id)
-		pg.flash(tr("已暂停：") + r.rowName())
+		pg.flash("已暂停：%s", r.rowName())
 	case download.Done:
 		pg.openRowFile(r)
 	default:
@@ -2809,11 +3024,11 @@ func (pg *mainPage) redownloadSelection() {
 		pg.histMu.Unlock()
 	}
 	if count == 0 {
-		pg.flash(tr("没有可重新下载的任务"))
+		pg.flash("没有可重新下载的任务")
 		return
 	}
 	pg.sel = first
-	pg.flash(fmt.Sprintf(tr("已重新下载 %d 个任务"), count))
+	pg.flash("已重新下载 %d 个任务", count)
 }
 
 // removeRow 删除一行任务；返回是否执行与完成文件是否保留在磁盘。提示由调用
@@ -2860,7 +3075,7 @@ func (pg *mainPage) pauseSelection() {
 			pg.mgr.Cancel(r.id)
 		}
 	}
-	pg.flash(tr("已暂停所选任务"))
+	pg.flash("已暂停所选任务")
 }
 
 func (pg *mainPage) resumeSelection() {
@@ -2880,7 +3095,7 @@ func (pg *mainPage) resumeSelection() {
 		pg.flash(resumeError)
 		return
 	}
-	pg.flash(tr("已继续所选任务"))
+	pg.flash("已继续所选任务")
 }
 
 func (pg *mainPage) pauseAll() {
@@ -2892,7 +3107,7 @@ func (pg *mainPage) pauseAll() {
 			pg.mgr.Cancel(s.ID)
 		}
 	}
-	pg.flash(tr("已停止全部任务"))
+	pg.flash("已停止全部任务")
 }
 
 func (pg *mainPage) toggleLimit() {
@@ -2917,7 +3132,7 @@ func (pg *mainPage) openRowFile(r d1Row) {
 			pg.fileMissing = make(map[string]bool)
 		}
 		pg.fileMissing[r.id] = true
-		pg.flash(tr("文件已失效，请重新下载"))
+		pg.flash("文件已失效，请重新下载")
 		return
 	}
 	pg.openLocalPath(r.snap.FilePath)
@@ -2972,7 +3187,7 @@ func (pg *mainPage) openLocalPath(path string) {
 	win := pg.win
 	go func() {
 		if err := mygo.Shell.OpenPath(path); err != nil && win != nil {
-			win.Update(func() { pg.flash(tr("无法打开文件或文件夹") + ": " + err.Error()) })
+			win.Update(func() { pg.flash("无法打开文件或文件夹：%s", err.Error()) })
 		}
 	}()
 }
@@ -2997,9 +3212,9 @@ func (pg *mainPage) hashText(r d1Row) string {
 		sha, md5 := hashFile(path)
 		result := "SHA-256 " + sha
 		if sha == "—" {
-			result = "校验失败：无法读取文件"
+			result = tr("校验失败：无法读取文件")
 		} else if md5 != "—" {
-			result = "SHA-256 " + sha + "，MD5 " + md5
+			result = "SHA-256 " + sha + tr("，") + "MD5 " + md5
 		}
 		pg.histMu.Lock()
 		if _, ok := pg.logs[key]; ok {
@@ -3013,12 +3228,21 @@ func (pg *mainPage) hashText(r d1Row) string {
 	return tr("计算中…")
 }
 
-func (pg *mainPage) flash(msg string) {
-	pg.status = msg
+// flash 记录状态提示的源串与参数；翻译只在显示处做一次。
+func (pg *mainPage) flash(source string, args ...any) {
+	pg.status, pg.statusArgs = source, args
 	pg.statusAt = time.Now()
 	if pg.svc != nil {
 		pg.svc.Invalidate()
 	}
+}
+
+// statusText 是状态提示的显示文案；源串只在显示处翻译一次。
+func (pg *mainPage) statusText() string {
+	if len(pg.statusArgs) == 0 {
+		return tr(pg.status)
+	}
+	return i18n.F(pg.status, pg.statusArgs...)
 }
 
 // ── 后台监听：剪贴板与夜间队列 ──────────────────────────────────────────
@@ -3026,11 +3250,16 @@ func (pg *mainPage) flash(msg string) {
 // Clipboard reads and writes are performed on the window update thread.
 // Remember our own write so clipboard monitoring does not create a duplicate.
 func (pg *mainPage) copyDownloadURL(address string) {
-	if pg.svc == nil {
+	pg.copyRowText(address)
+}
+
+// copyRowText 把文本写入剪贴板并短暂提示；记住自身写入避免监听重复触发。
+func (pg *mainPage) copyRowText(text string) {
+	if pg.svc == nil || text == "" {
 		return
 	}
-	pg.clipLast = address
-	pg.svc.WriteClipboard(address)
+	pg.clipLast = text
+	pg.svc.WriteClipboard(text)
 	pg.markCopied("url")
 }
 
@@ -3201,7 +3430,7 @@ func (pg *mainPage) runNightStop(now time.Time) {
 		paused++
 	}
 	if paused > 0 {
-		pg.flash(tr("已到停止时间，暂停 ") + strconv.Itoa(paused) + tr(" 个任务"))
+		pg.flash("已到停止时间，暂停 %d 个任务", paused)
 	}
 }
 
@@ -3316,7 +3545,7 @@ func (pg *mainPage) nightWatch() {
 			}
 			if started > 0 {
 				pg.sel = ""
-				pg.flash(fmt.Sprintf(tr("夜间队列已开始 %d 个任务"), started))
+				pg.flash("夜间队列已开始 %d 个任务", started)
 			}
 		})
 	}

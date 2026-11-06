@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"openDL/extensionstore"
+	"openDL/i18n"
 	"openDL/style"
 
 	"github.com/egoist/mygo/ui"
@@ -65,7 +66,7 @@ func (pg *mainPage) applicationMenu(c *ui.Context, p *d1Palette) {
 						d1DropdownItem(c, p, "移至主队列（等待）", "layers", pg.canMoveSelection("main")).OnClick(func() { pg.showAppMenu = false; pg.moveSelectionToQueue("main") })
 						for _, spec := range activeCustomQueues {
 							queue := spec
-							d1DropdownItem(c, p, tr("移至 ")+queue.Name, "layers", pg.canMoveSelection(queue.ID)).OnClick(func() { pg.showAppMenu = false; pg.moveSelectionToQueue(queue.ID) })
+							d1DropdownItemText(c, p, "move-queue:"+queue.ID, i18n.F("移至 %s", queue.Name), "layers", pg.canMoveSelection(queue.ID)).OnClick(func() { pg.showAppMenu = false; pg.moveSelectionToQueue(queue.ID) })
 						}
 					})
 					if pg.taskViewportWidth(c) < 800 {
@@ -90,6 +91,7 @@ func (pg *mainPage) applicationMenu(c *ui.Context, p *d1Palette) {
 					})
 					d1DropdownItem(c, p, "导入设置", "upload", true).OnClick(func() { pg.showAppMenu = false; pg.importSettings() })
 					d1DropdownItem(c, p, "导出设置", "download", true).OnClick(func() { pg.showAppMenu = false; pg.exportSettings() })
+					d1DropdownItem(c, p, "导出诊断信息", "download", true).OnClick(func() { pg.showAppMenu = false; pg.exportDiagnostics() })
 					d1DropdownItem(c, p, "检查更新", "redo", true).OnClick(func() {
 						pg.showAppMenu = false
 						pg.openUpdateDialog()

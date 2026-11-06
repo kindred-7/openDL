@@ -149,9 +149,8 @@ func (pg *mainPage) updateBadge(c *ui.Context, p *d1Palette) {
 		pg.updater.badgeOpen = true
 	}
 	panel := ui.PopoverBase(c, button, &pg.updater.badgeOpen, func(tip ui.Element) {
-		tip.AttachTo(button, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(4, 0, 0, 0).
-			Width(320).Padding(12).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card).
-			Shadow(0, 2, 8, 0, ui.RGBA(0, 0, 0, .2)).Children(func() {
+		style.ShadowOverlay(tip.AttachTo(button, ui.AnchorBottomStart, ui.AnchorTopStart).Margin(4, 0, 0, 0).
+			Width(320).Padding(12).Radius(style.RadiusSM).Border(1, p.bd).Background(p.card)).Children(func() {
 			ui.Column(c).Gap(6).Children(func() {
 				ui.Text(c, fmt.Sprintf(tr("发现新版本 %s"), version)).FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg)
 				ui.Scroll(c).FillWidth().MaxHeight(220).Children(func() {
@@ -524,7 +523,7 @@ func (pg *mainPage) updateProgress(c *ui.Context, p *d1Palette) {
 
 func (pg *mainPage) updateDialog(c *ui.Context, p *d1Palette) {
 	ui.DialogBase(c, &pg.updater.showDialog, func(back, panel ui.Element) {
-		back.Background(ui.RGBA(0, 0, 0, .42))
+		back.Background(style.DimOverlayColor)
 		panel.Width(420).Padding(18).Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).Label(tr("应用更新"))
 		ui.Column(c).FillWidth().Gap(12).Children(func() {
 			ui.Text(c, tr("应用更新")).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)

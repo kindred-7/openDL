@@ -1,4 +1,5 @@
 {
+  "m_extension_version": { "message": "Version: $ARG1$", "placeholders": { "arg1": { "content": "$1" } } },
   "m_sniff_formats": { "message": "Custom resource formats" },
   "m_sniff_formats_placeholder": { "message": "For example: mobi, epub, psd" },
   "m_sniff_formats_hint": { "message": "Add formats separated by commas, spaces or line breaks; download takeover is unchanged." },

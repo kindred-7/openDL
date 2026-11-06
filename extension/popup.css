@@ -4,6 +4,7 @@
   --bg: #fff; --fg: #09090b; --mu: #71717a; --mu2: #a1a1aa;
   --bd: #e4e4e7; --bd2: #d4d4d8; --card: #fafafa; --sel: #f4f4f5;
   --pri: #0d74ce; --onpri: #fff; --focus: #5eb1ef; --ok: #16a34a; --bad: #dc2626;
+  --brand: #0d74ce; --brand-fg: #202020;
   --page: #f4f4f5;
   /* 几何令牌：4/8px 节奏，圆角同心（容器 8px → 内部 5/6px） */
   --radius: 8px; --gap: 8px; --popup-radius: 16px;
@@ -12,11 +13,13 @@
   :root:not([data-theme="light"]) { --bg: #09090b; --fg: #fafafa; --mu: #a1a1aa; --mu2: #71717a;
     --bd: #27272a; --bd2: #3f3f46; --card: #101012; --sel: #1c1c20;
     --pri: #087cd4; --onpri: #fff; --ok: #4ade80; --bad: #f87171;
+    --brand: #70b8ff; --brand-fg: #eee;
     --page: #000; }
 }
 :root[data-theme="dark"] { color-scheme: dark; --bg: #09090b; --fg: #fafafa; --mu: #a1a1aa; --mu2: #71717a;
   --bd: #27272a; --bd2: #3f3f46; --card: #101012; --sel: #1c1c20;
-  --pri: #087cd4; --onpri: #fff; --ok: #4ade80; --bad: #f87171; --page: #000; }
+  --pri: #087cd4; --onpri: #fff; --ok: #4ade80; --bad: #f87171;
+  --brand: #70b8ff; --brand-fg: #eee; --page: #000; }
 :root[data-theme="light"] { color-scheme: light; }
 * { box-sizing: border-box; }
 html { border-radius: var(--popup-radius); overflow: hidden; background: transparent; }
@@ -27,12 +30,15 @@ body { width: 360px; height: 520px; margin: 0; display: flex; flex-direction: co
 /* 头部：macOS 轻量标题栏 40px + shadcn 卡片底；两段布局（品牌 / 操作） */
 .header { display: flex; align-items: center; gap: 10px;
   height: 40px; padding: 0 12px; background: var(--card); flex: none; }
-.brand { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; }
+.brand h1 { margin: 0; flex: none; color: var(--brand-fg); font-size: 16px; font-weight: 700; white-space: nowrap; }
+.brand-accent { color: var(--brand); font-weight: 600; }
+.brand-version { padding: 1px 6px; border: 1px solid var(--bd); border-radius: 6px;
+  color: var(--mu); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.brand-version:empty { display: none; }
 
 /* 分隔：品牌与右侧接管开关 */
 .header-sep { flex: none; }
-h1 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; font-weight: 600; }
-.brand-icon { display: block; width: 24px; height: 24px; border-radius: 6px; }
 .switchwrap { display: flex; align-items: center; }
 
 /* 开关：与桌面端 .sw 同规格（28×16 轨道、12px 圆钮） */
@@ -114,8 +120,6 @@ button:disabled { color: var(--mu2); cursor: default; }
 }
 body { background: radial-gradient(ellipse 110% 75% at 0% 0%, var(--popup-glow), transparent 72%), linear-gradient(155deg, var(--bg), var(--popup-surface)); }
 .header { height: 54px; padding: 0 14px; gap: 10px; background: transparent; }
-.brand { gap: 10px; }
-h1 { font-size: 15px; font-weight: 650; }
 .switch { width: 38px; height: 22px; }
 .slider { border-radius: 999px; }
 .slider::after { width: 16px; height: 16px; left: 3px; top: 3px; background: #fff; box-shadow: var(--popup-shadow); }

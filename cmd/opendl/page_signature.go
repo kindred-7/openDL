@@ -30,7 +30,7 @@ func (pg *mainPage) verifyFileSignature(row d1Row) {
 			if err != nil {
 				pg.flash(err.Error())
 			} else {
-				pg.flash(tr("文件数字签名已通过验证"))
+				pg.flash("文件数字签名已通过验证")
 			}
 		})
 	}()

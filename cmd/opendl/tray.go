@@ -70,7 +70,7 @@ func (pg *mainPage) trayStatusWatch() {
 				}
 				tip := appBrand
 				if running > 0 {
-					tip = appBrand + " " + fmt.Sprintf(tr("%d 个下载中"), running) + "，" + bytesText(speed) + "/s"
+					tip = appBrand + " " + fmt.Sprintf(tr("%d 个下载中"), running) + tr("，") + bytesText(speed) + "/s"
 				}
 				tray.SetToolTip(tip)
 			})

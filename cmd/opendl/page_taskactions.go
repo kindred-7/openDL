@@ -26,7 +26,12 @@ func decodeAppIcon() *ui.Bitmap {
 }
 
 func (pg *mainPage) hasCompleted() bool {
-	for _, r := range pg.allRows() {
+	return pg.hasCompletedIn(pg.allRows())
+}
+
+// hasCompletedIn 在给定行快照上判断是否有已完成任务。
+func (pg *mainPage) hasCompletedIn(all []d1Row) bool {
+	for _, r := range all {
 		if !r.pending && r.snap.State == download.Done {
 			return true
 		}
@@ -49,7 +54,12 @@ func resumableRow(r d1Row) bool {
 }
 
 func (pg *mainPage) hasResumableTask() bool {
-	for _, r := range pg.allRows() {
+	return pg.hasResumableTaskIn(pg.allRows())
+}
+
+// hasResumableTaskIn 在给定行快照上判断是否有可开始任务。
+func (pg *mainPage) hasResumableTaskIn(all []d1Row) bool {
+	for _, r := range all {
 		if resumableRow(r) {
 			return true
 		}
@@ -65,20 +75,20 @@ func (pg *mainPage) startAllTasks() {
 			pg.toggleRow(r)
 		}
 	}
-	pg.flash(tr("已开始全部可开始的任务"))
+	pg.flash("已开始全部可开始的任务")
 }
 
 func (pg *mainPage) pauseAllTasks() {
 	pg.nightOn = false
 	pg.saveAppPreferences()
 	pg.pauseAll()
-	pg.flash(tr("已暂停全部任务"))
+	pg.flash("已暂停全部任务")
 }
 
 func (pg *mainPage) menuGroup(c *ui.Context, p *d1Palette, id, label, icon string, body func()) {
 	open := pg.appMenuSection == id
 	c.Key("menu-group:" + id)
-	button := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(5).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).
+	button := ui.ButtonBase(c).FillWidth().Padding(6, 8).Gap(8).Radius(style.RadiusXXS).Justify(ui.Start).AlignItems(ui.Center).Cursor(ui.CursorPointer).
 		Role(ui.RoleMenuItem).Label(tr(label)).Expanded(open)
 	if button.Hovered() || button.FocusVisible() {
 		button.Background(p.hover)
@@ -104,14 +114,15 @@ func (pg *mainPage) menuGroup(c *ui.Context, p *d1Palette, id, label, icon strin
 		// 二级菜单的指针是否悬停在行上；离开后短暂宽限再收起，避免斜向移入弹层时闪断。
 		hoverState := ui.Local(button, "menu-group-hover", func() bool { return true })
 		ui.Overlay(c, func() {
-			panel := ui.Box(c).AttachTo(button, ui.AnchorTopEnd, ui.AnchorTopStart).Margin(-4, 0, 0, 6)
+			panel := ui.Box(c).AttachTo(button, ui.AnchorTopEnd, ui.AnchorTopStart)
 			width, height := c.Size()
 			menuWidth := float32(300)
 			if width > 0 {
 				menuWidth = min(menuWidth, max(float32(1), width-32))
 			}
 			menuHeight := max(float32(1), height-32)
-			d1DropdownPanel(panel, p).Width(menuWidth).Role(ui.RoleMenu).Label(tr(label)).FocusGroup(ui.Vertical).Children(func() {
+			// Margin 在共用面板之后写，保留侧向偏移：向右 6px、上移 4px。
+			d1DropdownPanel(panel, p).Margin(-4, 0, 0, 6).Width(menuWidth).Role(ui.RoleMenu).Label(tr(label)).FocusGroup(ui.Vertical).Children(func() {
 				ui.Scroll(c).FillWidth().MaxHeight(menuHeight).Children(body)
 			})
 			if panel.OverlayShortcut(0, ui.KeyEscape) {
@@ -165,7 +176,7 @@ func (pg *mainPage) openExternalLink(address string) {
 	win := pg.win
 	go func() {
 		if err := mygo.Shell.OpenExternal(address); err != nil && win != nil {
-			win.Update(func() { pg.flash(tr("无法打开链接") + ": " + err.Error()) })
+			win.Update(func() { pg.flash("无法打开链接：%s", err.Error()) })
 		}
 	}()
 }
