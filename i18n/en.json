@@ -769,6 +769,7 @@
   "无法确认下载文件的最终地址": "Cannot determine final download URL",
   "下载数据不完整：%d，预期 %d: %w": "Incomplete download data: %d, expected %d: %w",
   "下载数据超过声明长度：%d，预期 %d": "Download data exceeds declared length: %d, expected %d",
+  "邮箱返回了 %d 字节，原附件应为 %d 字节。请从原邮件重新下载": "The mail server returned %d bytes, but the original attachment was %d bytes. Download it again from the original message.",
   "无法保存分段进度：%w": "Cannot save segment progress: %w",
   "服务器未正确返回分段数据（HTTP %d）": "Server did not return the requested segment (HTTP %d)",
   "服务器返回的分段范围无效：%q": "Invalid segment range returned by server: %q",

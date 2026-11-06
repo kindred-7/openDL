@@ -125,7 +125,7 @@ func (m *Manager) EnablePersistence(dir string) error {
 		t := &Task{id: id, url: rec.Request.URL, pageURL: rec.Request.PageURL, title: rec.Request.Title, nameHint: rec.Request.Name, keepExtension: rec.Request.KeepExtension, mediaMode: rec.Request.MediaMode, mediaQuality: rec.Request.MediaQuality, audioLanguage: rec.Request.AudioLanguage, syncMinutes: rec.Request.SyncMinutes, queue: rec.Request.Queue,
 			headers: downloadHeaders(rec.Request.Headers, m.userAgent), conns: conns, directory: rec.Request.Directory, openFolder: rec.Request.OpenFolder, expectedSHA256: rec.Request.SHA256, verifiedSHA256: rec.VerifiedSHA256, failedSHA256: rec.FailedSHA256, requireSignature: rec.Request.RequireSignature, signature: rec.Request.Signature, signatureKey: rec.Request.SignatureKey,
 			filePath: rec.FilePath, created: rec.Created, finished: rec.Finished, cancel: make(chan struct{}), resumeTotal: rec.Total, resumeValidator: rec.Validator, resumeResource: rec.ResourceFingerprint,
-			publishSHA256: rec.PublishSHA256, publishSize: rec.PublishSize}
+			publishSHA256: rec.PublishSHA256, publishSize: rec.PublishSize, expectedBytes: rec.Request.ExpectedBytes}
 		t.signatureVerified.Store(rec.SignatureVerified && rec.State == Done)
 		if validFingerprint(rec.StableResourceFingerprint) {
 			t.resumeStableResource = rec.StableResourceFingerprint
@@ -305,6 +305,7 @@ func (m *Manager) saveTaskLocked(t *Task) error {
 	rec := storedTask{Version: 1, ID: t.id, Request: Request{URL: storedURL, PageURL: pageURL, Title: t.title, Name: t.nameHint, KeepExtension: t.keepExtension, MediaMode: t.mediaMode, MediaQuality: t.mediaQuality, AudioLanguage: t.audioLanguage, Headers: headers, Connections: t.conns, Directory: t.directory, OpenFolder: t.openFolder, Queue: queue, SHA256: expected, RequireSignature: s.SignatureRequired, Signature: signatureText, SignatureKey: signatureKey},
 		State: s.State, Held: s.Held, FilePath: s.FilePath, Created: s.Created, Finished: s.Finished, NightSince: s.NightSince, Total: t.resumeTotal, Validator: t.resumeValidator, ResourceFingerprint: t.resumeResource, Error: s.Err, CredentialsOmitted: omitted, VerifiedSHA256: verified, FailedSHA256: failed, PublishSHA256: publishHash, PublishSize: publishSize}
 	rec.ClientRequestID, rec.SubmissionSHA256 = t.clientRequestID, t.submissionSHA256
+	rec.Request.ExpectedBytes = t.expectedBytes
 	rec.StableResourceFingerprint = t.resumeStableResource
 	rec.UnverifiedChunks = t.resumeUnverified
 	rec.Elapsed = s.Elapsed

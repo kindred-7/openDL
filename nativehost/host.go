@@ -27,21 +27,23 @@ const apiBase = "http://127.0.0.1:37913"
 
 // message is what the extension sends.
 type message struct {
-	RequestID       string `json:"requestId,omitempty"`
-	Type            string `json:"type"`
-	URL             string `json:"url,omitempty"`
-	PageURL         string `json:"pageUrl,omitempty"`
-	Title           string `json:"title,omitempty"`
-	Filename        string `json:"filename,omitempty"`
-	Cookie          string `json:"cookie,omitempty"`
-	MediaMode       string `json:"mediaMode,omitempty"`
-	MediaQuality    string `json:"mediaQuality,omitempty"`
-	AudioLanguage   string `json:"audioLanguage,omitempty"`
-	Queue           string `json:"queue,omitempty"`
-	ClientRequestID string `json:"clientRequestId,omitempty"`
-	ID              string `json:"id,omitempty"`
-	Folder          bool   `json:"folder,omitempty"`
-	Before          string `json:"before,omitempty"`
+	RequestID       string            `json:"requestId,omitempty"`
+	Type            string            `json:"type"`
+	URL             string            `json:"url,omitempty"`
+	PageURL         string            `json:"pageUrl,omitempty"`
+	Title           string            `json:"title,omitempty"`
+	Filename        string            `json:"filename,omitempty"`
+	Cookie          string            `json:"cookie,omitempty"`
+	Headers         map[string]string `json:"headers,omitempty"`
+	ExpectedBytes   int64             `json:"expectedBytes,omitempty"`
+	MediaMode       string            `json:"mediaMode,omitempty"`
+	MediaQuality    string            `json:"mediaQuality,omitempty"`
+	AudioLanguage   string            `json:"audioLanguage,omitempty"`
+	Queue           string            `json:"queue,omitempty"`
+	ClientRequestID string            `json:"clientRequestId,omitempty"`
+	ID              string            `json:"id,omitempty"`
+	Folder          bool              `json:"folder,omitempty"`
+	Before          string            `json:"before,omitempty"`
 }
 
 func Run() {
@@ -117,7 +119,7 @@ func handleMessage(client *http.Client, token string, msg message) map[string]an
 func handle(client *http.Client, token string, msg message) map[string]any {
 	switch msg.Type {
 	case "ping":
-		return map[string]any{"ok": true, "app": "opendl-host", "version": "0.1.0", "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2"}, "siteRules": loadSiteRules()}
+		return map[string]any{"ok": true, "app": "opendl-host", "version": "0.1.0", "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}, "siteRules": loadSiteRules()}
 	case "desktopStatus":
 		info, err := desktopCapabilities(client, token, nil)
 		if err != nil {
@@ -212,6 +214,9 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 		if msg.ClientRequestID != "" {
 			required = append(required, "idempotent-submission")
 		}
+		if len(msg.Headers) > 0 || msg.ExpectedBytes > 0 {
+			required = append(required, "browser-attachment-replay")
+		}
 		if len(required) > 0 {
 			if err := checkDesktopCapabilities(client, token, required); err != nil {
 				var unsupported *unsupportedCapabilityError
@@ -232,6 +237,20 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 		if len(msg.Cookie) > 8192 || strings.ContainsAny(msg.Cookie, "\r\n\x00") {
 			return map[string]any{"ok": false, "reason": i18n.T("Cookie 格式无效")}
 		}
+		headers := make(map[string]string, len(msg.Headers)+1)
+		for name, value := range msg.Headers {
+			switch name {
+			case "Referer", "User-Agent", "Accept", "Accept-Language":
+				if len(value) <= 4096 && !strings.ContainsAny(value, "\r\n\x00") {
+					headers[name] = value
+					continue
+				}
+			}
+			return map[string]any{"ok": false, "reason": i18n.F("请求头格式无效：%s", name)}
+		}
+		if msg.Cookie != "" {
+			headers["Cookie"] = msg.Cookie
+		}
 		payload := map[string]any{
 			"url":             msg.URL,
 			"pageUrl":         msg.PageURL,
@@ -243,8 +262,11 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 			"queue":           msg.Queue,
 			"clientRequestId": msg.ClientRequestID,
 		}
-		if msg.Cookie != "" {
-			payload["headers"] = map[string]string{"Cookie": msg.Cookie}
+		if len(headers) > 0 {
+			payload["headers"] = headers
+		}
+		if msg.ExpectedBytes > 0 {
+			payload["expectedBytes"] = msg.ExpectedBytes
 		}
 		body, _ := json.Marshal(payload)
 		endpoint := "/api/download"

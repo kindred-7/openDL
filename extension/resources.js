@@ -30,5 +30,17 @@
     ["audio/wav", "wav"], ["audio/x-wav", "wav"], ["audio/webm", "webm"]
   ]);
   const defaultInlineFormats = "pdf, doc, docx, xls, txt, json, png, jpg, xml";
-  globalThis.openDLResourceTypes = Object.freeze({ media, downloadable, discoverable, playlistMime, directMediaMime, defaultInlineFormats });
+
+  function isCoremailAttachmentDownload(value) {
+    if (typeof value !== "string" || !/^https?:\/\/[^/?#]+\/(?:js\d+|coremail)\/s\?/.test(value)) return false;
+    try {
+      const params = new URL(value).searchParams;
+      return params.get("func") === "mbox:getMessageData" &&
+        params.get("mode") === "download" && Boolean(params.get("sid"));
+    } catch {
+      return false;
+    }
+  }
+
+  globalThis.openDLResourceTypes = Object.freeze({ media, downloadable, discoverable, playlistMime, directMediaMime, defaultInlineFormats, isCoremailAttachmentDownload });
 })();

@@ -6,7 +6,7 @@
 // is unavailable and the background entry loads these files first instead.
 if (typeof importScripts === "function") importScripts("resources.js", "i18n.js");
 const localize = globalThis.openDLI18n.t;
-const { downloadable: DOWNLOAD_EXT, playlistMime, directMediaMime } = globalThis.openDLResourceTypes;
+const { downloadable: DOWNLOAD_EXT, playlistMime, directMediaMime, isCoremailAttachmentDownload } = globalThis.openDLResourceTypes;
 const HOST_NAME = "com.example.opendl";
 let port = null;
 let ready = false;
@@ -191,6 +191,55 @@ function rememberDownloadContext(details) {
   downloadContexts.delete(details.url);
   downloadContexts.set(details.url, entries.slice(-16));
   if (downloadContexts.size > 256) downloadContexts.delete(downloadContexts.keys().next().value);
+}
+
+// Replay only the headers sent for this attachment and tab. Keep them in
+// worker memory until the matching browser download starts or the entry expires.
+const coremailRequests = new Map();
+const coremailReplayHeaders = ["Cookie", "Referer", "User-Agent", "Accept", "Accept-Language"];
+let coremailTakeover = true;
+let coremailSettingChanged = false;
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes["opendl-takeover"]) return;
+  coremailSettingChanged = true;
+  coremailTakeover = changes["opendl-takeover"].newValue !== false;
+  if (!coremailTakeover) coremailRequests.clear();
+});
+chrome.storage.local.get({ "opendl-takeover": true }).then((stored) => {
+  if (coremailSettingChanged) return;
+  coremailTakeover = stored["opendl-takeover"] !== false;
+  if (!coremailTakeover) coremailRequests.clear();
+}).catch(() => {});
+
+function captureCoremailRequest(details) {
+  if (!coremailTakeover || details.tabId < 0 || details.method !== "GET" || details.url.length > 4096 ||
+      !isCoremailAttachmentDownload(details.url) || !Array.isArray(details.requestHeaders)) return;
+  const headers = {};
+  for (const name of coremailReplayHeaders) {
+    const value = details.requestHeaders.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value;
+    if (typeof value === "string" && value.length <= (name === "Cookie" ? 8192 : 4096) && /^[\x20-\x7e]*$/.test(value)) {
+      headers[name] = value;
+    }
+  }
+  rememberCoremailRequest(details, headers);
+}
+
+function rememberCoremailRequest(details, headers) {
+  const { requestId, tabId, url } = details;
+  const request = { url, tabId, headers, ready: false, size: 0 };
+  coremailRequests.set(requestId, request);
+  if (coremailRequests.size > 64) coremailRequests.delete(coremailRequests.keys().next().value);
+  setTimeout(() => {
+    if (coremailRequests.get(requestId) === request) coremailRequests.delete(requestId);
+  }, 30000);
+  return request;
+}
+
+const coremailRequestFilter = { urls: ["*://*/js*/s*", "*://*/coremail/s*"] };
+try {
+  chrome.webRequest.onSendHeaders.addListener(captureCoremailRequest, coremailRequestFilter, ["requestHeaders", "extraHeaders"]);
+} catch {
+  chrome.webRequest.onSendHeaders.addListener(captureCoremailRequest, coremailRequestFilter, ["requestHeaders"]);
 }
 let playlistChanges = Promise.resolve();
 const playlistStorageKey = (tabId) => `opendl-playlists:${tabId}`;
@@ -379,13 +428,25 @@ async function promptInlineDocument(details, mime, background = false) {
 
 chrome.webRequest.onHeadersReceived.addListener((details) => {
   if (details.tabId < 0 || details.url.length > 4096 || !/^https?:/i.test(details.url)) return;
+  const coremailURL = isCoremailAttachmentDownload(details.url);
+  let coremail = coremailRequests.get(details.requestId);
+  if (coremailTakeover && details.method === "GET" && details.statusCode === 200 &&
+      (coremail?.tabId === details.tabId || coremailURL)) {
+    coremail ||= rememberCoremailRequest(details, null);
+    const encoding = details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-encoding")?.value;
+    const size = Number(details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-length")?.value);
+    coremail.size = (!encoding || encoding.toLowerCase() === "identity") && Number.isSafeInteger(size) && size > 0 ? size : 0;
+    coremail.ready = true;
+  }
   const header = details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-type");
   const mime = (header?.value || "").split(";", 1)[0].trim().toLowerCase();
   // Inline top-level documents do not create a browser download. Offer the
   // existing desktop prompt while leaving the browser viewer operational.
   if (details.type === "main_frame" && details.method === "GET" && details.statusCode === 200) {
     const disposition = details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-disposition")?.value || "";
-    if (!/^\s*attachment(?:\s*;|\s*$)/i.test(disposition)) void promptInlineDocument(details, mime);
+    if (!coremail && !coremailURL && !/^\s*attachment(?:\s*;|\s*$)/i.test(disposition)) {
+      void promptInlineDocument(details, mime);
+    }
   }
   if ((details.type === "xmlhttprequest" || details.type === "sub_frame" || details.type === "object" || details.type === "other") &&
       details.method === "GET" && (details.statusCode === 200 || details.statusCode === 206)) {
@@ -400,7 +461,7 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
   // Explicit attachments can use dynamic URLs with no useful suffix, such as
   // NAS download endpoints. Do not retain the response header or its filename.
   const attachment = /^\s*attachment(?:\s*;|\s*$)/i.test(disposition);
-  if (attachment && details.statusCode >= 200 && details.statusCode < 300) rememberDownloadContext(details);
+  if ((attachment || coremail?.ready) && details.statusCode >= 200 && details.statusCode < 300) rememberDownloadContext(details);
   // Media element requests are useful even without a suffix. Do not classify
   // arbitrary fetch/XHR video fragments as complete downloadable files.
   const ext = playlistExt || (details.type === "media" ? directMediaMime.get(mime) : "");
@@ -722,6 +783,36 @@ async function downloadSourceTab(item) {
   return referred.length === 1 ? referred[0] : null;
 }
 
+async function handoffCoremailAttachment(item, url, sourceTab, pageUrl, filename) {
+  const resume = () => chrome.downloads.resume(item.id).catch(() => {});
+  if (!coremailTakeover || !mediaCapabilities.has("browser-attachment-replay")) return resume();
+
+  const tabId = sourceTab?.id;
+  const matches = [...coremailRequests].filter(([, request]) => request.ready && request.url === url && request.tabId === tabId);
+  const [requestId, request] = matches.length === 1 ? matches[0] : [];
+  if (request) coremailRequests.delete(requestId);
+
+  const { Cookie: capturedCookie, ...headers } = request?.headers || {};
+  let cookie = capturedCookie || "";
+  const fileSize = Number.isSafeInteger(item.fileSize) && item.fileSize > 0 ? item.fileSize : 0;
+  const expectedBytes = request?.size || fileSize;
+  if (!request?.headers) {
+    try { cookie = await cookiesForTab(tabId, url, item.cookieStoreId || ""); } catch {}
+    if (!cookie || !expectedBytes) return resume();
+  }
+  const reply = await sendToDesktop({
+    type: "prompt", url, pageUrl, title: sourceTab?.title || "", filename, cookie, headers, expectedBytes,
+    submissionNonce: `browser-download-${item.id}`
+  }, { tabId, url, pageUrl, useBrowserCookies: false });
+  if (reply?.deliveryUnknown) {
+    await captureNotice(localize("无法确认桌面端是否收到任务，请先检查桌面任务列表"));
+    return;
+  }
+  if (!reply?.ok) return resume();
+  try { await chrome.downloads.cancel(item.id); } catch { return; }
+  try { await chrome.downloads.erase({ id: item.id }); } catch {}
+}
+
 chrome.downloads.onCreated.addListener((item) => {
   void (async () => {
     try {
@@ -759,6 +850,11 @@ chrome.downloads.onCreated.addListener((item) => {
       const tabId = sourceTab?.id;
       const title = sourceTab?.title || "";
       const pageUrl = String(sourceItem.referrer || sourceTab?.url || "").slice(0, 4096);
+      const coremailURL = isCoremailAttachmentDownload(sourceItem.finalUrl) ? sourceItem.finalUrl : url;
+      if (isCoremailAttachmentDownload(coremailURL)) {
+        await handoffCoremailAttachment(sourceItem, coremailURL, sourceTab, pageUrl, filename);
+        return;
+      }
       try { cookie = await cookiesForTab(tabId, url, sourceItem.cookieStoreId || ""); } catch {}
       // GitHub Actions artifacts require a signed-in browser session. If its
       // cookie store cannot be identified, keep the original browser download

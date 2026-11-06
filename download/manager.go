@@ -48,6 +48,7 @@ type Request struct {
 	Name          string            `json:"filename,omitempty"`
 	KeepExtension bool              `json:"keepExtension,omitempty"`
 	Headers       map[string]string `json:"headers,omitempty"`
+	ExpectedBytes int64             `json:"expectedBytes,omitempty"` // original browser attachment size, zero if unknown
 	// Connections is how many parallel Range connections this task uses;
 	// Zero takes the manager default; -1 selects automatic adaptation.
 	Connections      int    `json:"connections,omitempty"`
@@ -136,6 +137,7 @@ type Task struct {
 	rangeRouteEpoch                 atomic.Uint64
 	directory                       string
 	openFolder                      bool
+	expectedBytes                   int64  // immutable, zero if unknown
 	expectedSHA256                  string // guarded by metaMu
 	signature                       string // Ed25519 分离签名，guarded by metaMu
 	signatureKey                    string // Ed25519 公钥，guarded by metaMu
@@ -874,7 +876,7 @@ func (m *Manager) AddRecorded(req Request) (string, error) {
 		id: newID(), url: req.URL, pageURL: req.PageURL,
 		title: req.Title, nameHint: req.Name, keepExtension: req.KeepExtension, mediaMode: req.MediaMode, mediaQuality: req.MediaQuality, audioLanguage: req.AudioLanguage, queue: req.Queue, syncMinutes: req.SyncMinutes, headers: cloneHeaders(req.Headers),
 		conns: req.Connections, directory: req.Directory, openFolder: req.OpenFolder, expectedSHA256: req.SHA256, signature: req.Signature, signatureKey: req.SignatureKey, requireSignature: req.RequireSignature,
-		cancel: make(chan struct{}), created: time.Now(),
+		cancel: make(chan struct{}), created: time.Now(), expectedBytes: req.ExpectedBytes,
 		clientRequestID: req.ClientRequestID, submissionSHA256: fingerprint, browserOrigin: req.BrowserOrigin,
 	}
 	t.state.Store(Queued)
@@ -931,7 +933,7 @@ func (m *Manager) add(req Request, held bool) string {
 		id: id, url: req.URL, pageURL: req.PageURL,
 		title: req.Title, nameHint: req.Name, keepExtension: req.KeepExtension, mediaMode: req.MediaMode, mediaQuality: req.MediaQuality, audioLanguage: req.AudioLanguage, queue: req.Queue, syncMinutes: req.SyncMinutes, headers: cloneHeaders(req.Headers),
 		conns: req.Connections, directory: req.Directory, openFolder: req.OpenFolder, expectedSHA256: req.SHA256, signature: req.Signature, signatureKey: req.SignatureKey, requireSignature: req.RequireSignature,
-		cancel: make(chan struct{}), created: time.Now(), browserOrigin: req.BrowserOrigin,
+		cancel: make(chan struct{}), created: time.Now(), browserOrigin: req.BrowserOrigin, expectedBytes: req.ExpectedBytes,
 	}
 	t.held.Store(held)
 	t.night.Store(held && req.Queue == "night")
@@ -1007,7 +1009,7 @@ func taskRequest(t *Task) Request {
 	if t.night.Load() {
 		queue = "night"
 	}
-	return Request{URL: address, PageURL: pageURL, Title: t.title, Name: t.nameHint, KeepExtension: t.keepExtension, MediaMode: t.mediaMode, MediaQuality: t.mediaQuality, AudioLanguage: t.audioLanguage, SyncMinutes: t.syncMinutes, Headers: headers, Connections: t.conns, Directory: t.directory, OpenFolder: t.openFolder, Queue: queue, SHA256: expected, RequireSignature: requireSignature, Signature: signatureText, SignatureKey: signatureKey, BrowserOrigin: t.browserOrigin}
+	return Request{URL: address, PageURL: pageURL, Title: t.title, Name: t.nameHint, KeepExtension: t.keepExtension, MediaMode: t.mediaMode, MediaQuality: t.mediaQuality, AudioLanguage: t.audioLanguage, SyncMinutes: t.syncMinutes, Headers: headers, ExpectedBytes: t.expectedBytes, Connections: t.conns, Directory: t.directory, OpenFolder: t.openFolder, Queue: queue, SHA256: expected, RequireSignature: requireSignature, Signature: signatureText, SignatureKey: signatureKey, BrowserOrigin: t.browserOrigin}
 }
 
 // Redownload replaces a task only after confirming its original credentials
@@ -1594,6 +1596,9 @@ func (m *Manager) download(t *Task) error {
 		}
 		return fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	if err := t.checkExpectedBytes(resp.ContentLength); err != nil {
+		return err
+	}
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
 		return fmt.Errorf(i18n.T("服务器返回了不支持的内容编码：%s"), encoding)
 	}
@@ -1826,6 +1831,9 @@ func (m *Manager) download(t *Task) error {
 		if fullResp.StatusCode != http.StatusOK {
 			return fmt.Errorf("HTTP %d", fullResp.StatusCode)
 		}
+		if err := t.checkExpectedBytes(fullResp.ContentLength); err != nil {
+			return err
+		}
 		t.total.Store(fullResp.ContentLength)
 		return m.downloadSingle(t, part, fullResp, fullCancel)
 	}
@@ -1833,6 +1841,13 @@ func (m *Manager) download(t *Task) error {
 		return err
 	}
 	return m.downloadSingle(t, part, resp, cancelReq)
+}
+
+func (t *Task) checkExpectedBytes(size int64) error {
+	if t.expectedBytes > 0 && size >= 0 && size != t.expectedBytes {
+		return fmt.Errorf(i18n.T("邮箱返回了 %d 字节，原附件应为 %d 字节。请从原邮件重新下载"), size, t.expectedBytes)
+	}
+	return nil
 }
 
 func (m *Manager) downloadSingle(t *Task, part string, resp *http.Response, cancel context.CancelFunc) error {
@@ -1886,6 +1901,9 @@ func (m *Manager) downloadSingle(t *Task, part string, resp *http.Response, canc
 			return &responseReadError{err: fmt.Errorf(i18n.T("下载数据不完整：%d，预期 %d: %w"), written, resp.ContentLength, io.ErrUnexpectedEOF)}
 		}
 		return fmt.Errorf(i18n.T("下载数据超过声明长度：%d，预期 %d"), written, resp.ContentLength)
+	}
+	if err := t.checkExpectedBytes(written); err != nil {
+		return err
 	}
 	// Windows refuses to rename an open file.
 	if err := out.Close(); err != nil {

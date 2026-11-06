@@ -18,7 +18,7 @@
     "gi"
   );
 
-  const DOWNLOAD_EXT = globalThis.openDLResourceTypes.downloadable;
+  const { downloadable: DOWNLOAD_EXT, isCoremailAttachmentDownload } = globalThis.openDLResourceTypes;
   const LINK_EXT = globalThis.openDLResourceTypes.discoverable;
   let customFormats = new Set(), customFormatRevision = 0;
   const parseCustomFormats = (value) => new Set(String(value || "").toLowerCase().split(/[\s,;]+/).map((x) => x.replace(/^\./, "")).filter((x) => /^[a-z0-9]{1,16}$/.test(x)).slice(0, 64));
@@ -526,6 +526,7 @@
       const data = JSON.parse(event.detail);
       if (!data || !["anchor", "open", "frame"].includes(data.kind) ||
           typeof data.url !== "string" || data.url.length > 4096 || !/^https?:/i.test(data.url)) return;
+      if (isCoremailAttachmentDownload(data.url)) return;
       // A frame may be a document viewer, so only intercept the known NAS
       // token endpoint there, never arbitrary embedded PDF/media documents.
       if (data.kind === "frame" ? !isNASTokenDownload(data.url) :
@@ -569,7 +570,9 @@
           chrome.runtime.sendMessage({ type: "releaseDownload", url }).catch(() => {});
           return;
         }
+        // The background takes over Coremail after the browser sends its request.
         if (event.ctrlKey || event.metaKey) return;
+        if (clickTakeoverEnabled && isCoremailAttachmentDownload(url)) return;
         const matches = matchesDownloadLink(url, anchor.hasAttribute("download"));
         if (!event.altKey && (!clickTakeoverEnabled || !matches)) return;
         const request = sendLinkTakeover(url, anchor.getAttribute("download") || "");

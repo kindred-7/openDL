@@ -169,7 +169,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ping":
-		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2"}})
+		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}})
 	case r.Method == http.MethodPost && (r.URL.Path == "/api/download" || r.URL.Path == "/api/prompt"):
 		var req download.Request
 		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
@@ -178,6 +178,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(w, i18n.T("下载请求格式无效"), http.StatusBadRequest)
+			return
+		}
+		if req.ExpectedBytes < 0 {
 			http.Error(w, i18n.T("下载请求格式无效"), http.StatusBadRequest)
 			return
 		}
