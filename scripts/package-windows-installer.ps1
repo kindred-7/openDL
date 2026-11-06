@@ -36,7 +36,7 @@ try {
     $packaged = Join-Path $temp 'setup.exe'
     & (Join-Path $PSScriptRoot 'create-installer-icon.ps1') -Source (Join-Path $root 'resources/icon.png') -Output $icon
     $allowed = if ($Architecture -eq 'arm64') { 'arm64' } else { 'x64compatible' }
-    & $InnoSetup '/Q' "/DVERSION=$Version" "/DARCH=$Architecture" "/DARCHITECTURES_ALLOWED=$allowed" "/DSTAGE=$stagePath" "/DICON=$icon" "/DHELPER=$(Join-Path $PSScriptRoot 'installer-stop.ps1')" (Join-Path $PSScriptRoot 'installer-engine.iss')
+    & $InnoSetup '/Q' "/DVERSION=$Version" "/DARCH=$Architecture" "/DARCHITECTURES_ALLOWED=$allowed" "/DSTAGE=$stagePath" "/DICON=$icon" "/DHELPER=$(Join-Path $PSScriptRoot 'installer-stop.ps1')" "/DUNINSTALLHELPER=$(Join-Path $PSScriptRoot 'uninstall-host.ps1')" (Join-Path $PSScriptRoot 'installer-engine.iss')
     if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $engine)) { throw 'Installation engine build failed.' }
     New-Item -ItemType Directory -Path $configDir | Out-Null
     $frontendConfig = [ordered]@{ name='OpenDL Installer'; identifier='com.example.opendl.installer'; version=$Version; main='../cmd/installer'; icon='../resources/icon.png' } | ConvertTo-Json

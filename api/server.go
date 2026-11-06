@@ -19,6 +19,7 @@ import (
 	"openDL/i18n"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -32,6 +33,10 @@ import (
 // DefaultPort is the fixed loopback port the native host connects to.
 const DefaultPort = 37913
 
+// promptIDCapacity caps the prompt dedupe table. Reaching the cap evicts the
+// oldest entries instead of refusing new prompts.
+const promptIDCapacity = 4096
+
 // Server serves the download manager over loopback HTTP.
 type Server struct {
 	Mgr         *download.Manager
@@ -41,6 +46,7 @@ type Server struct {
 	InstallExit func(string) bool
 	promptMu    sync.Mutex
 	promptIDs   map[string][32]byte
+	promptOrder []string // insertion order of promptIDs, drained oldest-first
 	ln          net.Listener
 	theme       atomic.Pointer[Theme]
 }
@@ -57,6 +63,7 @@ type ThemeColors struct {
 	OnPrimary string `json:"onPrimary"`
 	Selection string `json:"selection"`
 	Focus     string `json:"focus"`
+	Brand     string `json:"brand,omitempty"`
 }
 
 // SetTheme publishes an immutable snapshot to HTTP handlers.
@@ -78,13 +85,22 @@ func NewToken() (string, error) {
 		return "", err
 	}
 	token := hex.EncodeToString(b[:])
+	// The token file is now JSON {port, token} so readers learn the bound
+	// port; a legacy plain-text file keeps its old meaning in ReadEndpoint.
+	data, err := json.Marshal(struct {
+		Port  int    `json:"port"`
+		Token string `json:"token"`
+	}{DefaultPort, token})
+	if err != nil {
+		return "", err
+	}
 	f, err := os.CreateTemp(dir, ".api-token-*")
 	if err != nil {
 		return "", err
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	if _, err = f.Write([]byte(token)); err == nil {
+	if _, err = f.Write(data); err == nil {
 		err = f.Sync()
 	}
 	if closeErr := f.Close(); err == nil {
@@ -108,6 +124,54 @@ func TokenPath() (string, error) {
 	return filepath.Join(dir, "opendl", "api-token"), nil
 }
 
+// Endpoint is the loopback port and per-install token recorded in the token
+// file, so local tools connect to the port the desktop app actually bound.
+type Endpoint struct {
+	Port  int
+	Token string
+}
+
+// ReadEndpoint loads the token file written by NewToken. A legacy plain-text
+// token file keeps its meaning: the token alone on DefaultPort.
+func ReadEndpoint() (Endpoint, error) {
+	path, err := TokenPath()
+	if err != nil {
+		return Endpoint{}, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Endpoint{}, err
+	}
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return Endpoint{}, errors.New(i18n.T("本地接口令牌为空"))
+	}
+	endpoint := Endpoint{Port: DefaultPort, Token: text}
+	if strings.HasPrefix(text, "{") {
+		var file struct {
+			Port  *int   `json:"port"`
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal([]byte(text), &file); err != nil {
+			return Endpoint{}, err
+		}
+		if file.Token == "" {
+			return Endpoint{}, errors.New(i18n.T("本地接口令牌为空"))
+		}
+		endpoint.Token = file.Token
+		if file.Port != nil {
+			if *file.Port < 1 || *file.Port > 65535 {
+				return Endpoint{}, errors.New(i18n.T("本地接口端口无效"))
+			}
+			endpoint.Port = *file.Port
+		}
+	}
+	return endpoint, nil
+}
+
+// BaseURL returns the loopback base URL for a port.
+func BaseURL(port int) string { return "http://127.0.0.1:" + strconv.Itoa(port) }
+
 // Start binds 127.0.0.1:DefaultPort and serves in the background.
 func (s *Server) Start() error {
 	if s.Token == "" {
@@ -116,7 +180,7 @@ func (s *Server) Start() error {
 	if s.Mgr == nil {
 		return errors.New(i18n.T("下载引擎未就绪"))
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:"+itoa(DefaultPort))
+	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(DefaultPort))
 	if err != nil {
 		return err
 	}
@@ -131,7 +195,7 @@ func (s *Server) StartWithNewToken() error {
 	if s.Mgr == nil {
 		return errors.New(i18n.T("下载引擎未就绪"))
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:"+itoa(DefaultPort))
+	ln, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(DefaultPort))
 	if err != nil {
 		return err
 	}
@@ -155,7 +219,7 @@ func (s *Server) Close() error {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if s.Token == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("X-OpenDL-Token")), []byte(s.Token)) != 1 {
-		http.Error(w, "bad token", http.StatusUnauthorized)
+		writeError(w, http.StatusUnauthorized, "unauthorized", i18n.T("访问令牌无效"))
 		return
 	}
 	switch {
@@ -163,8 +227,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Executable string `json:"executable"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32768)).Decode(&request); err != nil || s.InstallExit == nil || !s.InstallExit(request.Executable) {
-			http.Error(w, "installer exit unavailable", http.StatusConflict)
+		if err := readJSON(w, r, &request, 32768); err != nil || s.InstallExit == nil || !s.InstallExit(request.Executable) {
+			writeError(w, http.StatusConflict, "installer_exit_unavailable", i18n.T("安装器退出请求无法处理"))
 			return
 		}
 		writeJSON(w, map[string]bool{"ok": true})
@@ -172,68 +236,63 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}})
 	case r.Method == http.MethodPost && (r.URL.Path == "/api/download" || r.URL.Path == "/api/prompt"):
 		var req download.Request
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
-		if err := decoder.Decode(&req); err != nil {
-			http.Error(w, i18n.T("下载请求格式无效"), http.StatusBadRequest)
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			http.Error(w, i18n.T("下载请求格式无效"), http.StatusBadRequest)
+		if err := readJSON(w, r, &req, 1<<20); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("下载请求格式无效"))
 			return
 		}
 		if req.ExpectedBytes < 0 {
-			http.Error(w, i18n.T("下载请求格式无效"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("下载请求格式无效"))
 			return
 		}
 		req.URL = strings.TrimSpace(req.URL)
 		u, err := url.Parse(req.URL)
 		if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "ftp" && u.Scheme != "ftps") {
-			http.Error(w, i18n.T("请输入有效的 HTTP、HTTPS、FTP 或 FTPS 下载地址"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid_url", i18n.T("请输入有效的 HTTP、HTTPS、FTP 或 FTPS 下载地址"))
 			return
 		}
 		for name, value := range req.Headers {
 			if !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
-				http.Error(w, fmt.Sprintf(i18n.T("请求头格式无效：%s"), name), http.StatusBadRequest)
+				writeError(w, http.StatusBadRequest, "invalid_header", fmt.Sprintf(i18n.T("请求头格式无效：%s"), name))
 				return
 			}
 		}
 		req.SHA256, err = download.NormalizeSHA256(req.SHA256)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid_sha256", err.Error())
 			return
 		}
 		if req.SyncMinutes != 0 {
-			http.Error(w, i18n.T("周期同步功能已移除"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "sync_removed", i18n.T("周期同步功能已移除"))
 			return
 		}
 		if req.MediaMode != "" && req.MediaMode != "hls-ts" && req.MediaMode != "dash-fmp4" {
-			http.Error(w, i18n.T("不支持的媒体下载模式"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "unsupported_media_mode", i18n.T("不支持的媒体下载模式"))
 			return
 		}
 		req.MediaQuality, err = download.NormalizeMediaQuality(req.MediaQuality)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid_media_quality", err.Error())
 			return
 		}
 		if req.MediaQuality != "" && req.MediaMode != "hls-ts" && req.MediaMode != "dash-fmp4" {
-			http.Error(w, i18n.T("画质选择仅对媒体下载有效"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "media_quality_without_media", i18n.T("画质选择仅对媒体下载有效"))
 			return
 		}
 		req.AudioLanguage, err = download.NormalizeAudioLanguage(req.AudioLanguage)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid_audio_language", err.Error())
 			return
 		}
 		if req.AudioLanguage != "" && req.MediaMode != "hls-ts" && req.MediaMode != "dash-fmp4" {
-			http.Error(w, i18n.T("音轨语言仅对媒体下载有效"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "audio_language_without_media", i18n.T("音轨语言仅对媒体下载有效"))
 			return
 		}
 		if !download.ValidQueueID(req.Queue) {
-			http.Error(w, i18n.T("不支持的下载队列"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "unsupported_queue", i18n.T("不支持的下载队列"))
 			return
 		}
 		if !download.ValidClientRequestID(req.ClientRequestID) {
-			http.Error(w, i18n.T("下载请求编号格式无效"), http.StatusBadRequest)
+			writeError(w, http.StatusBadRequest, "invalid_request_id", i18n.T("下载请求编号格式无效"))
 			return
 		}
 		// The prompt endpoint is the browser integration's entry point. Older
@@ -242,13 +301,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		req.BrowserOrigin = r.URL.Path == "/api/prompt" || r.Header.Get("X-OpenDL-Source") == "browser"
 		if r.URL.Path == "/api/prompt" {
 			if s.Prompt == nil {
-				http.Error(w, "prompt unavailable", http.StatusServiceUnavailable)
+				writeError(w, http.StatusServiceUnavailable, "prompt_unavailable", i18n.T("桌面确认弹窗未就绪"))
 				return
 			}
 			if req.ClientRequestID == "" {
 				var id [16]byte
 				if _, err := rand.Read(id[:]); err != nil {
-					http.Error(w, "request unavailable", http.StatusServiceUnavailable)
+					writeError(w, http.StatusServiceUnavailable, "request_unavailable", i18n.T("无法生成请求编号"))
 					return
 				}
 				req.ClientRequestID = hex.EncodeToString(id[:])
@@ -262,16 +321,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			previous, exists := s.promptIDs[req.ClientRequestID]
 			if exists && previous != digest {
 				s.promptMu.Unlock()
-				http.Error(w, "request conflict", http.StatusConflict)
+				writeError(w, http.StatusConflict, "request_conflict", i18n.T("请求编号已用于其他下载内容"))
 				return
 			}
 			if !exists {
-				if len(s.promptIDs) >= 4096 || !s.Prompt(req) {
+				// A grow-only dedupe table eventually fills the cap with stale
+				// ids and leaks memory. At capacity evict the oldest entries
+				// instead of refusing the new prompt.
+				for len(s.promptIDs) >= promptIDCapacity {
+					oldest := s.promptOrder[0]
+					s.promptOrder = s.promptOrder[1:]
+					delete(s.promptIDs, oldest)
+				}
+				if !s.Prompt(req) {
 					s.promptMu.Unlock()
-					http.Error(w, "prompt queue unavailable", http.StatusTooManyRequests)
+					writeError(w, http.StatusTooManyRequests, "prompt_queue_unavailable", i18n.T("下载确认队列暂不可用"))
 					return
 				}
 				s.promptIDs[req.ClientRequestID] = digest
+				s.promptOrder = append(s.promptOrder, req.ClientRequestID)
 			}
 			s.promptMu.Unlock()
 			writeJSON(w, map[string]any{"id": req.ClientRequestID})
@@ -280,18 +348,14 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		id, err := s.Mgr.AddRecorded(req)
 		if err != nil {
 			if errors.Is(err, download.ErrUpdateInProgress) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusServiceUnavailable)
-				_ = json.NewEncoder(w).Encode(map[string]any{"code": "update_in_progress", "accepted": false})
+				writeError(w, http.StatusServiceUnavailable, "update_in_progress", i18n.T("应用正在准备更新，请稍后再操作"), map[string]any{"accepted": false})
 				return
 			}
 			if errors.Is(err, download.ErrRequestIDConflict) {
-				http.Error(w, err.Error(), http.StatusConflict)
+				writeError(w, http.StatusConflict, "request_id_conflict", err.Error())
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]any{"code": "journal_write_failed", "accepted": false})
+			writeError(w, http.StatusServiceUnavailable, "journal_write_failed", i18n.T("无法保存下载任务，请检查应用日志和存储空间"), map[string]any{"accepted": false})
 			return
 		}
 		writeJSON(w, map[string]any{"id": id})
@@ -334,7 +398,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			if end < 0 {
-				http.Error(w, "task cursor expired", http.StatusConflict)
+				writeError(w, http.StatusConflict, "task_cursor_expired", i18n.T("任务游标已失效"))
 				return
 			}
 		}
@@ -349,8 +413,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ID     string `json:"id"`
 			Folder bool   `json:"folder"`
 		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body); err != nil || body.ID == "" || s.OpenTask == nil {
-			http.Error(w, "invalid request", http.StatusBadRequest)
+		if err := readJSON(w, r, &body, 4096); err != nil || body.ID == "" || s.OpenTask == nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("任务请求格式无效"))
 			return
 		}
 		allowed := false
@@ -361,11 +425,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if !allowed {
-			http.Error(w, "task unavailable", http.StatusNotFound)
+			writeError(w, http.StatusNotFound, "task_unavailable", i18n.T("任务不可用或未完成"))
 			return
 		}
 		if err := s.OpenTask(body.ID, body.Folder); err != nil {
-			http.Error(w, "cannot open file", http.StatusConflict)
+			writeError(w, http.StatusConflict, "open_failed", i18n.T("无法打开文件"))
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true})
@@ -373,8 +437,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ID string `json:"id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if err := readJSON(w, r, &body, 4096); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("请求格式无效"))
 			return
 		}
 		s.Mgr.Cancel(body.ID)
@@ -383,8 +447,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ID string `json:"id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if err := readJSON(w, r, &body, 4096); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("请求格式无效"))
 			return
 		}
 		writeJSON(w, map[string]any{"ok": s.Mgr.Resume(body.ID)})
@@ -392,13 +456,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ID string `json:"id"`
 		}
-		decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
-		if err := decoder.Decode(&body); err != nil || strings.TrimSpace(body.ID) == "" {
-			http.Error(w, i18n.T("任务编号无效"), http.StatusBadRequest)
-			return
-		}
-		if err := decoder.Decode(&struct{}{}); err != io.EOF {
-			http.Error(w, i18n.T("任务编号无效"), http.StatusBadRequest)
+		if err := readJSON(w, r, &body, 4096); err != nil || strings.TrimSpace(body.ID) == "" {
+			writeError(w, http.StatusBadRequest, "invalid_task_id", i18n.T("任务编号无效"))
 			return
 		}
 		writeJSON(w, map[string]any{"ok": s.Mgr.FinishLive(strings.TrimSpace(body.ID))})
@@ -406,8 +465,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var body struct {
 			ID string `json:"id"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+		if err := readJSON(w, r, &body, 4096); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("请求格式无效"))
 			return
 		}
 		s.Mgr.Cancel(body.ID)
@@ -417,7 +476,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && r.URL.Path == "/api/pause-all":
 		writeJSON(w, map[string]any{"count": s.Mgr.PauseAll()})
 	default:
-		http.Error(w, "not found", http.StatusNotFound)
+		writeError(w, http.StatusNotFound, "not_found", i18n.T("接口不存在"))
 	}
 }
 
@@ -426,18 +485,30 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// readJSON reads a request body under one size limit and uses a second
+// Decode to reject trailing content.
+func readJSON(w http.ResponseWriter, r *http.Request, v any, maxBytes int64) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBytes))
+	if err := decoder.Decode(v); err != nil {
+		return err
 	}
-	var buf [16]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return errors.New(i18n.T("请求包含多余的尾随内容"))
 	}
-	return string(buf[i:])
+	return nil
 }
 
-var errClosed = errors.New("closed")
+// writeError returns the uniform {code, reason} error body. The code drives
+// extension-side localization while the reason is for development diagnosis
+// and fallback display; extra fields (such as accepted) keep compatibility.
+func writeError(w http.ResponseWriter, status int, code, reason string, extra ...map[string]any) {
+	body := map[string]any{"code": code, "reason": reason}
+	for _, fields := range extra {
+		for key, value := range fields {
+			body[key] = value
+		}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}

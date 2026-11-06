@@ -19,11 +19,26 @@ import (
 	"syscall"
 	"time"
 
+	"openDL/api"
 	"openDL/i18n"
 	"openDL/pathrec"
 )
 
-const apiBase = "http://127.0.0.1:37913"
+// version optionally overrides the packaged version via -ldflags -X.
+var version string
+
+const defaultVersion = "0.1.0"
+
+// desktopAddress returns the desktop loopback base URL and token. The token
+// file is reread per request because the app rotates the token; it also
+// records the actual port (a legacy plain-text file means the default port).
+func desktopAddress() (string, string) {
+	info, err := api.ReadEndpoint()
+	if err != nil {
+		return api.BaseURL(api.DefaultPort), ""
+	}
+	return api.BaseURL(info.Port), info.Token
+}
 
 // message is what the extension sends.
 type message struct {
@@ -47,14 +62,26 @@ type message struct {
 }
 
 func Run() {
+	RunWithVersion("")
+}
+
+// RunWithVersion serves browser messages using the desktop package version.
+func RunWithVersion(appVersion string) {
+	hostVersion := version
+	if hostVersion == "" {
+		hostVersion = appVersion
+	}
+	if hostVersion == "" {
+		hostVersion = defaultVersion
+	}
 	refreshLanguage()
 	client := &http.Client{Timeout: 15 * time.Second}
-	_ = serveNative(os.Stdin, os.Stdout, client, readToken)
+	_ = serveNative(os.Stdin, os.Stdout, client, desktopAddress, hostVersion)
 }
 
 // Handle independent requests concurrently so a slow desktop response does
 // not hold up unrelated downloads. Output frames must remain serialized.
-func serveNative(input io.Reader, output io.Writer, client *http.Client, token func() string) error {
+func serveNative(input io.Reader, output io.Writer, client *http.Client, address func() (string, string), hostVersion string) error {
 	const maxConcurrent = 16
 	slots := make(chan struct{}, maxConcurrent)
 	var outputMu sync.Mutex
@@ -72,7 +99,7 @@ func serveNative(input io.Reader, output io.Writer, client *http.Client, token f
 		}
 		refreshLanguage()
 		if msg.Type == "ping" {
-			if err := writeReply(handleMessage(client, "", msg)); err != nil {
+			if err := writeReply(handleMessage(client, "", "", msg, hostVersion)); err != nil {
 				return err
 			}
 			continue
@@ -83,11 +110,13 @@ func serveNative(input io.Reader, output io.Writer, client *http.Client, token f
 			go func(msg message) {
 				defer workers.Done()
 				defer func() { <-slots }()
-				// Read the current token for every request; the app rotates it.
-				_ = writeReply(handleMessage(client, token(), msg))
+				// Read the current token and port for every request; the app
+				// rotates the token.
+				base, token := address()
+				_ = writeReply(handleMessage(client, base, token, msg, hostVersion))
 			}(msg)
 		default:
-			reply := map[string]any{"ok": false, "reason": i18n.T("原生主机繁忙，请稍后重试")}
+			reply := map[string]any{"ok": false, "code": "host_busy", "reason": i18n.T("原生主机繁忙，请稍后重试")}
 			if msg.RequestID != "" {
 				reply["requestId"] = msg.RequestID
 			}
@@ -98,30 +127,63 @@ func serveNative(input io.Reader, output io.Writer, client *http.Client, token f
 	}
 }
 
-// loadSiteRules 读取站点规则（本地文件与远程规则源缓存合并，本地优先）；每次请求都重读，修改文件即
-// 生效，无需重启浏览器或应用。
+// fileStamp caches parsed configuration per modification time.
+type fileStamp struct {
+	modTime time.Time
+	size    int64
+}
+
+// stamp returns a file's modification time and size; a missing file is zero.
+func stamp(path string) fileStamp {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fileStamp{}
+	}
+	return fileStamp{modTime: info.ModTime(), size: info.Size()}
+}
+
+var siteRulesCache struct {
+	mu          sync.Mutex
+	loaded      bool
+	localStamp  fileStamp
+	remoteStamp fileStamp
+	rules       []pathrec.SiteRule
+}
+
+// loadSiteRules 读取站点规则（本地文件与远程规则源缓存合并，本地优先）；
+// 按文件修改时间缓存解析结果，文件变化后自动重读，无需重启浏览器或应用。
 func loadSiteRules() []pathrec.SiteRule {
 	path, err := pathrec.SiteRulesPath()
 	if err != nil {
 		return nil
 	}
-	return pathrec.LoadSiteRulesWithRemote(path)
+	remotePath, _ := pathrec.SiteRulesRemotePath()
+	localNow, remoteNow := stamp(path), stamp(remotePath)
+	siteRulesCache.mu.Lock()
+	defer siteRulesCache.mu.Unlock()
+	if siteRulesCache.loaded && siteRulesCache.localStamp == localNow && siteRulesCache.remoteStamp == remoteNow {
+		return siteRulesCache.rules
+	}
+	rules := pathrec.LoadSiteRulesWithRemote(path)
+	siteRulesCache.localStamp, siteRulesCache.remoteStamp = localNow, remoteNow
+	siteRulesCache.loaded, siteRulesCache.rules = true, rules
+	return rules
 }
 
-func handleMessage(client *http.Client, token string, msg message) map[string]any {
-	reply := handle(client, token, msg)
+func handleMessage(client *http.Client, base, token string, msg message, hostVersion string) map[string]any {
+	reply := handle(client, base, token, msg, hostVersion)
 	if msg.RequestID != "" {
 		reply["requestId"] = msg.RequestID
 	}
 	return reply
 }
 
-func handle(client *http.Client, token string, msg message) map[string]any {
+func handle(client *http.Client, base, token string, msg message, hostVersion string) map[string]any {
 	switch msg.Type {
 	case "ping":
-		return map[string]any{"ok": true, "app": "opendl-host", "version": "0.1.0", "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}, "siteRules": loadSiteRules()}
+		return map[string]any{"ok": true, "app": "opendl-host", "version": hostVersion, "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}, "siteRules": loadSiteRules()}
 	case "desktopStatus":
-		info, err := desktopCapabilities(client, token, nil)
+		info, err := desktopCapabilities(client, base, token, nil)
 		if err != nil {
 			return map[string]any{"ok": false, "reason": err.Error()}
 		}
@@ -132,20 +194,20 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 		method, endpoint := http.MethodGet, "/api/browser-tasks-v2"
 		if msg.Type == "browserTasks" && msg.Before != "" {
 			if len(msg.Before) > 128 {
-				return map[string]any{"ok": false, "reason": "invalid task cursor"}
+				return map[string]any{"ok": false, "code": "invalid_task_cursor", "reason": i18n.T("任务游标无效")}
 			}
 			endpoint += "?before=" + url.QueryEscape(msg.Before)
 		}
 		var body io.Reader
 		if msg.Type == "openBrowserTask" {
 			if msg.ID == "" || len(msg.ID) > 128 {
-				return map[string]any{"ok": false, "reason": "invalid task"}
+				return map[string]any{"ok": false, "code": "invalid_task", "reason": i18n.T("任务编号无效")}
 			}
 			method, endpoint = http.MethodPost, "/api/browser-task-open"
 			encoded, _ := json.Marshal(map[string]any{"id": msg.ID, "folder": msg.Folder})
 			body = bytes.NewReader(encoded)
 		}
-		req, err := http.NewRequest(method, apiBase+endpoint, body)
+		req, err := http.NewRequest(method, base+endpoint, body)
 		if err != nil {
 			return map[string]any{"ok": false, "reason": err.Error()}
 		}
@@ -165,7 +227,7 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 			if msg.Type == "browserTasks" && resp.StatusCode == http.StatusConflict {
 				return map[string]any{"ok": false, "code": "task_cursor_expired"}
 			}
-			return map[string]any{"ok": false, "reason": fmt.Sprintf("HTTP %d", resp.StatusCode)}
+			return map[string]any{"ok": false, "reason": fmt.Sprintf(i18n.T("桌面端返回 HTTP %d"), resp.StatusCode)}
 		}
 		if msg.Type == "openBrowserTask" {
 			return map[string]any{"ok": true}
@@ -218,7 +280,7 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 			required = append(required, "browser-attachment-replay")
 		}
 		if len(required) > 0 {
-			if err := checkDesktopCapabilities(client, token, required); err != nil {
+			if err := checkDesktopCapabilities(client, base, token, required); err != nil {
 				var unsupported *unsupportedCapabilityError
 				if errors.As(err, &unsupported) && unsupported.capability == "idempotent-submission" {
 					return map[string]any{"ok": false, "unsupportedIdempotency": true, "reason": err.Error()}
@@ -273,7 +335,7 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 		if msg.Type == "prompt" {
 			endpoint = "/api/prompt"
 		}
-		req, err := http.NewRequest(http.MethodPost, apiBase+endpoint, bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, base+endpoint, bytes.NewReader(body))
 		if err != nil {
 			return map[string]any{"ok": false, "reason": err.Error()}
 		}
@@ -295,9 +357,11 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 			if resp.StatusCode == http.StatusUnauthorized {
 				code = "desktop_unauthorized"
 				reason = i18n.T("桌面端认证失败，请重新启动扩展和桌面应用")
-			} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusConflict {
-				if data, readErr := io.ReadAll(io.LimitReader(resp.Body, 512)); readErr == nil && strings.TrimSpace(string(data)) != "" {
-					reason = strings.TrimSpace(string(data))
+			} else if resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusConflict || resp.StatusCode == http.StatusTooManyRequests {
+				if data, readErr := io.ReadAll(io.LimitReader(resp.Body, 512)); readErr == nil {
+					if errorCode, errorReason := parseAPIError(data); errorReason != "" {
+						code, reason = errorCode, errorReason
+					}
 				}
 			} else if resp.StatusCode == http.StatusServiceUnavailable {
 				var rejection struct {
@@ -329,8 +393,21 @@ func handle(client *http.Client, token string, msg message) map[string]any {
 		out["ok"] = true
 		return out
 	default:
-		return map[string]any{"ok": false, "reason": "unknown type " + msg.Type}
+		return map[string]any{"ok": false, "code": "unknown_type", "reason": i18n.F("未知消息类型: %s", msg.Type)}
 	}
+}
+
+// parseAPIError reads the desktop app's uniform {code, reason} error body.
+// A legacy plain-text body becomes the reason, preserving display semantics.
+func parseAPIError(data []byte) (string, string) {
+	var body struct {
+		Code   string `json:"code"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(data, &body); err == nil && (body.Code != "" || body.Reason != "") {
+		return body.Code, body.Reason
+	}
+	return "", strings.TrimSpace(string(data))
 }
 
 type unsupportedCapabilityError struct{ capability string }
@@ -340,8 +417,8 @@ func (e *unsupportedCapabilityError) Error() string {
 }
 
 // Check before posting so unsupported options cannot be silently ignored.
-func checkDesktopCapabilities(client *http.Client, token string, required []string) error {
-	_, err := desktopCapabilities(client, token, required)
+func checkDesktopCapabilities(client *http.Client, base, token string, required []string) error {
+	_, err := desktopCapabilities(client, base, token, required)
 	return err
 }
 
@@ -350,11 +427,11 @@ type desktopInfo struct {
 	Theme        json.RawMessage `json:"theme"`
 }
 
-func desktopCapabilities(client *http.Client, token string, required []string) (desktopInfo, error) {
+func desktopCapabilities(client *http.Client, base, token string, required []string) (desktopInfo, error) {
 	var info desktopInfo
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/api/ping", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/ping", nil)
 	if err != nil {
 		return info, err
 	}
@@ -416,26 +493,28 @@ func writeMessage(w io.Writer, v any) error {
 	return err
 }
 
-// readToken loads the per-install token the desktop app wrote.
-func readToken() string {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return ""
-	}
-	b, err := os.ReadFile(filepath.Join(dir, "opendl", "api-token"))
-	if err != nil {
-		return ""
-	}
-	return string(b)
+var languageCache struct {
+	mu     sync.Mutex
+	loaded bool
+	stamp  fileStamp
 }
 
 // Read the desktop preference without changing the native messaging protocol.
+// Cached by modification time so not every message rereads settings.json.
 func refreshLanguage() {
 	dir, err := os.UserConfigDir()
 	if err != nil {
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(dir, "opendl", "settings.json"))
+	path := filepath.Join(dir, "opendl", "settings.json")
+	now := stamp(path)
+	languageCache.mu.Lock()
+	defer languageCache.mu.Unlock()
+	if languageCache.loaded && languageCache.stamp == now {
+		return
+	}
+	languageCache.loaded, languageCache.stamp = true, now
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}

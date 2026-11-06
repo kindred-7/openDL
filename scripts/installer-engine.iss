@@ -17,6 +17,9 @@
 #ifndef HELPER
   #error HELPER is required
 #endif
+#ifndef UNINSTALLHELPER
+  #define UNINSTALLHELPER "uninstall-host.ps1"
+#endif
 
 [Setup]
 AppId=com.example.opendl
@@ -45,6 +48,7 @@ Source: "{#STAGE}\icon.png"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#STAGE}\extension\*"; DestDir: "{app}\extension"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#HELPER}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#HELPER}"; Flags: dontcopy
+Source: "{#UNINSTALLHELPER}"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\OpenDL"; Filename: "{app}\OpenDL.exe"
@@ -55,6 +59,7 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [UninstallRun]
 Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\installer-stop.ps1"" -Executable ""{app}\OpenDL.exe"""; Flags: runhidden; RunOnceId: "StopOpenDL"
+Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File ""{app}\uninstall-host.ps1"" -HostName com.example.opendl -RemoveFiles"; Flags: runhidden; RunOnceId: "UnregisterNativeHost"
 
 [Code]
 var

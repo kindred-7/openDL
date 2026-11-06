@@ -25,7 +25,6 @@ func SiteRulesPath() (string, error) {
 	return filepath.Join(dir, "opendl", "site-rules.json"), nil
 }
 
-
 // SiteRulesRemotePath 返回远程规则源的本地缓存路径。
 func SiteRulesRemotePath() (string, error) {
 	dir, err := os.UserConfigDir()
@@ -74,7 +73,7 @@ func ParseSiteRules(data []byte) []SiteRule {
 	}
 	rules := make([]SiteRule, 0, len(raw))
 	for _, rule := range raw {
-		if !validSiteRule(rule) {
+		if !validSiteRule(&rule) {
 			continue
 		}
 		rules = append(rules, rule)
@@ -85,21 +84,26 @@ func ParseSiteRules(data []byte) []SiteRule {
 	return rules
 }
 
-// validSiteRule 检查长度、正则与扩展名格式；路径按展开后的完整形态编译。
-func validSiteRule(rule SiteRule) bool {
+// validSiteRule 检查长度、正则与扩展名格式；路径按展开后的完整形态编译，
+// 并把预编译结果写回规则供 Match 复用，避免每个 URL 重复编译。
+func validSiteRule(rule *SiteRule) bool {
 	if rule.Path == "" || len(rule.Path) > maxSiteRuleLen || len(rule.Host) > maxSiteRuleLen || len(rule.Tag) > 128 {
 		return false
 	}
 	if rule.SiteKind < 0 || rule.SiteKind > 5 {
 		return false
 	}
-	if _, err := regexp.Compile(ExpandPathPattern(rule.Path, rule.Host)); err != nil {
+	pathRe, err := regexp.Compile(ExpandPathPattern(rule.Path, rule.Host))
+	if err != nil {
 		return false
 	}
+	rule.pathRe = pathRe
 	if rule.Host != "" {
-		if _, err := regexp.Compile("(?i)" + rule.Host); err != nil {
+		hostRe, err := regexp.Compile("(?i)" + rule.Host)
+		if err != nil {
 			return false
 		}
+		rule.hostRe = hostRe
 	}
 	for _, ext := range rule.Exts {
 		if len(ext) > 16 || !strings.HasPrefix(ext, ".") || strings.ContainsAny(ext, "/\\") {

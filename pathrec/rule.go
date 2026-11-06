@@ -14,6 +14,9 @@ type SiteRule struct {
 	Path     string   `json:"path"`               // path regexp; "^/" marks a host-relative pattern
 	Exts     []string `json:"exts,omitempty"`     // extension filter such as ".mp4"; empty matches any
 	SiteKind int      `json:"siteKind,omitempty"` // rule family from the content script (1..5)
+
+	hostRe *regexp.Regexp // precompiled host match, "(?i)" prefixed
+	pathRe *regexp.Regexp // precompiled expanded path match
 }
 
 // ExpandPathPattern ports the content script's rule expansion: a pattern
@@ -39,6 +42,21 @@ func (r SiteRule) Regexp() *regexp.Regexp {
 	return regexp.MustCompile(ExpandPathPattern(r.Path, r.Host))
 }
 
+// Compile precompiles the host and path patterns once at load time so Match
+// does not recompile them for every URL. An invalid pattern is left nil and
+// Match falls back to compiling on demand.
+func (r *SiteRule) Compile() {
+	r.hostRe, r.pathRe = nil, nil
+	if r.Host != "" {
+		if re, err := regexp.Compile(`(?i)` + r.Host); err == nil {
+			r.hostRe = re
+		}
+	}
+	if re, err := regexp.Compile(ExpandPathPattern(r.Path, r.Host)); err == nil {
+		r.pathRe = re
+	}
+}
+
 // Match reports whether a URL satisfies the rule's path pattern, host
 // pattern and extension filter.
 func (r SiteRule) Match(rawURL string) bool {
@@ -47,7 +65,10 @@ func (r SiteRule) Match(rawURL string) bool {
 		return false
 	}
 	if r.Host != "" {
-		hostRe := regexp.MustCompile(`(?i)` + r.Host)
+		hostRe := r.hostRe
+		if hostRe == nil {
+			hostRe = regexp.MustCompile(`(?i)` + r.Host)
+		}
 		if !hostRe.MatchString(strings.ToLower(u.Hostname())) {
 			return false
 		}
@@ -68,7 +89,11 @@ func (r SiteRule) Match(rawURL string) bool {
 			return false
 		}
 	}
-	return r.Regexp().MatchString(rawURL)
+	pathRe := r.pathRe
+	if pathRe == nil {
+		pathRe = r.Regexp()
+	}
+	return pathRe.MatchString(rawURL)
 }
 
 // MatchRule returns the first rule that matches.

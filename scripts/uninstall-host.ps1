@@ -1,4 +1,5 @@
-# Removes the opendl native messaging host registration for Chrome and Edge.
+# Removes the opendl native messaging host registration for Chrome, Edge and
+# Firefox.
 #
 #   .\scripts\uninstall-host.ps1 [-HostName com.example.opendl] [-RemoveFiles]
 #
@@ -15,8 +16,12 @@ $install = Join-Path $env:LOCALAPPDATA "opendl"
 
 function Remove-Registration([string]$Key) {
   if (Test-Path $Key) {
-    Remove-Item -Path $Key -Recurse -Force
-    Write-Host "已移除注册: $Key"
+    try {
+      Remove-Item -Path $Key -Recurse -Force
+      Write-Host "已移除注册: $Key"
+    } catch {
+      Write-Host "无法移除注册: $Key ($($_.Exception.Message))"
+    }
   }
 }
 
@@ -34,13 +39,17 @@ function Remove-SharedFiles {
   }
   foreach ($file in @((Join-Path $install "$HostName.json"), (Join-Path $install "$HostName-firefox.json"), (Join-Path $install "opendl-host.exe"))) {
     if (Test-Path $file) {
-      Remove-Item -Path $file -Force
-      Write-Host "已删除文件: $file"
+      try {
+        Remove-Item -Path $file -Force
+        Write-Host "已删除文件: $file"
+      } catch {
+        Write-Host "无法删除文件: $file ($($_.Exception.Message))"
+      }
     }
   }
 }
 
-foreach ($browser in @("Google\Chrome", "Microsoft\Edge")) {
+foreach ($browser in @("Google\Chrome", "Microsoft\Edge", "Mozilla")) {
   Remove-Registration "HKCU:\Software\$browser\NativeMessagingHosts\$HostName"
 }
 Remove-SharedFiles -Enabled:$RemoveFiles

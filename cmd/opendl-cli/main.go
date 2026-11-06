@@ -18,8 +18,6 @@ import (
 	"openDL/download"
 )
 
-const apiBase = "http://127.0.0.1:37913"
-
 type headerFlags []string
 
 func (h *headerFlags) String() string { return strings.Join(*h, ", ") }
@@ -33,7 +31,6 @@ func main() {
 	directory := flag.String("dir", "", "save directory")
 	queue := flag.String("queue", "", "queue id, night, or empty for main")
 	page := flag.String("page", "", "source page URL (sets Referer)")
-	syncMinutes := new(int) // Keep request construction compatible; periodic sync is no longer offered.
 	mediaMode := flag.String("media", "", "hls-ts or dash-fmp4")
 	mediaQuality := flag.String("quality", "", "height cap such as 720")
 	audioLanguage := flag.String("audio", "", "audio track language")
@@ -106,7 +103,7 @@ func main() {
 				fail(fmt.Errorf("--batch 不接受命令行地址"))
 			}
 			if err := submitBatch(*batch, func() (download.Request, error) {
-				return buildRequest("", name, directory, queue, page, syncMinutes, mediaMode, mediaQuality, audioLanguage, sha256, clientID, headers)
+				return buildRequest("", name, directory, queue, page, mediaMode, mediaQuality, audioLanguage, sha256, clientID, headers)
 			}); err != nil {
 				fail(err)
 			}
@@ -115,7 +112,7 @@ func main() {
 		if len(args) != 1 {
 			fail(fmt.Errorf("add 需要一个下载地址"))
 		}
-		req, err := buildRequest(strings.TrimSpace(args[0]), name, directory, queue, page, syncMinutes, mediaMode, mediaQuality, audioLanguage, sha256, clientID, headers)
+		req, err := buildRequest(strings.TrimSpace(args[0]), name, directory, queue, page, mediaMode, mediaQuality, audioLanguage, sha256, clientID, headers)
 		if err != nil {
 			fail(err)
 		}
@@ -128,14 +125,13 @@ func main() {
 }
 
 // buildRequest 组装一次提交；请求头形如 名称: 值，来源页自动补 Referer。
-func buildRequest(address string, name, directory, queue, page *string, syncMinutes *int, mediaMode, mediaQuality, audioLanguage, sha256, clientID *string, headers headerFlags) (download.Request, error) {
+func buildRequest(address string, name, directory, queue, page *string, mediaMode, mediaQuality, audioLanguage, sha256, clientID *string, headers headerFlags) (download.Request, error) {
 	req := download.Request{
 		URL:             strings.TrimSpace(address),
 		Name:            strings.TrimSpace(*name),
 		Directory:       strings.TrimSpace(*directory),
 		Queue:           strings.TrimSpace(*queue),
 		PageURL:         strings.TrimSpace(*page),
-		SyncMinutes:     *syncMinutes,
 		MediaMode:       strings.TrimSpace(*mediaMode),
 		MediaQuality:    strings.TrimSpace(*mediaQuality),
 		AudioLanguage:   strings.TrimSpace(*audioLanguage),
@@ -205,16 +201,14 @@ func fail(err error) {
 	os.Exit(1)
 }
 
-func token() (string, error) {
-	path, err := api.TokenPath()
+// endpoint 读取接口令牌文件（JSON {port, token}），连接文件记录的实际端口；
+// 旧的纯文本令牌文件沿用默认端口。
+func endpoint() (string, string, error) {
+	info, err := api.ReadEndpoint()
 	if err != nil {
-		return "", err
+		return "", "", fmt.Errorf("无法读取接口令牌（应用未运行？）: %w", err)
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("无法读取接口令牌（应用未运行？）: %w", err)
-	}
-	return strings.TrimSpace(string(data)), nil
+	return api.BaseURL(info.Port), info.Token, nil
 }
 
 func call(method, path string, body []byte) (map[string]any, error) {
@@ -230,12 +224,12 @@ func call(method, path string, body []byte) (map[string]any, error) {
 }
 
 func callJSON(method, path string, body []byte) (any, error) {
-	secret, err := token()
+	base, secret, err := endpoint()
 	if err != nil {
 		return nil, err
 	}
 	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(method, apiBase+path, bytes.NewReader(body))
+	req, err := http.NewRequest(method, base+path, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

@@ -14,10 +14,23 @@ try {
     $exitRequested = $false
     if (Test-Path -LiteralPath $tokenPath) {
         try {
-            $token = [IO.File]::ReadAllText($tokenPath).Trim()
-            $body = @{ executable = $target } | ConvertTo-Json -Compress
-            $response = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:37913/api/installer-exit' -Headers @{ 'X-OpenDL-Token' = $token } -ContentType 'application/json' -Body $body -TimeoutSec 3
-            $exitRequested = $response.ok -eq $true
+            # The token file is JSON {port, token}; a legacy plain-text token
+            # keeps its meaning and uses the default port.
+            $port = 37913
+            $token = ''
+            $raw = [IO.File]::ReadAllText($tokenPath).Trim()
+            if ($raw.StartsWith('{')) {
+                $info = $raw | ConvertFrom-Json
+                if ($info.token) { $token = [string]$info.token }
+                if ($info.port -ge 1 -and $info.port -le 65535) { $port = [int]$info.port }
+            } elseif ($raw) {
+                $token = $raw
+            }
+            if ($token) {
+                $body = @{ executable = $target } | ConvertTo-Json -Compress
+                $response = Invoke-RestMethod -Method Post -Uri "http://127.0.0.1:$port/api/installer-exit" -Headers @{ 'X-OpenDL-Token' = $token } -ContentType 'application/json' -Body $body -TimeoutSec 3
+                $exitRequested = $response.ok -eq $true
+            }
         } catch { }
     }
     # The optional force path is used only after an explicit installer prompt.
