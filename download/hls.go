@@ -3,6 +3,7 @@ package download
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"encoding/binary"
@@ -72,19 +73,25 @@ func readHLSAES(source io.Reader, key, iv []byte) ([]byte, error) {
 }
 
 func readHLSAESWithLength(source io.Reader, key, iv []byte, expected int64) ([]byte, error) {
-	const maxHLSCipherSegment = 64 << 20
-	if expected > maxHLSCipherSegment {
-		return nil, fmt.Errorf(i18n.T("暂不支持超过 64 MiB 的加密分片"))
+	return readHLSAESWithLimit(source, key, iv, expected, 64<<20, i18n.NewError("暂不支持超过 64 MiB 的加密分片"))
+}
+
+func readHLSAESWithLimit(source io.Reader, key, iv []byte, expected, limit int64, overLimit error) ([]byte, error) {
+	if expected > limit {
+		return nil, overLimit
 	}
-	cipherText, err := io.ReadAll(io.LimitReader(source, maxHLSCipherSegment+1))
+	cipherText, err := io.ReadAll(io.LimitReader(source, limit+1))
 	if err != nil {
 		return nil, &responseReadError{err: err}
 	}
-	if len(cipherText) == 0 || len(cipherText) > maxHLSCipherSegment {
-		if len(cipherText) == 0 && expected > 0 && expected <= maxHLSCipherSegment {
+	if int64(len(cipherText)) > limit {
+		return nil, overLimit
+	}
+	if len(cipherText) == 0 {
+		if expected > 0 {
 			return nil, &responseReadError{err: io.ErrUnexpectedEOF}
 		}
-		return nil, fmt.Errorf(i18n.T("暂不支持超过 64 MiB 的加密分片"))
+		return nil, fmt.Errorf(i18n.T("HLS 加密分片长度无效"))
 	}
 	if expected >= 0 && int64(len(cipherText)) != expected {
 		return nil, &responseReadError{err: io.ErrUnexpectedEOF}
@@ -99,8 +106,8 @@ func readHLSAESWithLength(source io.Reader, key, iv []byte, expected int64) ([]b
 	if len(iv) != aes.BlockSize {
 		return nil, fmt.Errorf(i18n.T("HLS 解密向量无效"))
 	}
-	plain := make([]byte, len(cipherText))
-	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plain, cipherText)
+	plain := cipherText
+	cipher.NewCBCDecrypter(block, iv).CryptBlocks(plain, plain)
 	padding := int(plain[len(plain)-1])
 	if padding == 0 || padding > aes.BlockSize || padding > len(plain) {
 		return nil, fmt.Errorf(i18n.T("HLS 解密填充无效"))
@@ -113,15 +120,56 @@ func readHLSAESWithLength(source io.Reader, key, iv []byte, expected int64) ([]b
 	return plain[:len(plain)-padding], nil
 }
 
-// hlsKey 返回媒体密钥；同一次任务内按密钥地址缓存。
-func (m *Manager) hlsKey(t *Task, original, page *url.URL, address string) ([]byte, error) {
+type hlsKeyRequest struct {
+	done chan struct{}
+	key  []byte
+	err  error
+}
+
+// Cache keys per task and share in-flight lookups between prefetch workers.
+func (m *Manager) hlsKey(t *Task, ctx context.Context, original, page *url.URL, address string) ([]byte, error) {
 	t.hlsKeyMu.Lock()
 	if key, ok := t.hlsKeys[address]; ok {
 		t.hlsKeyMu.Unlock()
 		return key, nil
 	}
+	if pending := t.hlsKeyRequests[address]; pending != nil {
+		t.hlsKeyMu.Unlock()
+		var canceled <-chan struct{}
+		if ctx != nil {
+			canceled = ctx.Done()
+		}
+		select {
+		case <-pending.done:
+			return pending.key, pending.err
+		case <-t.cancel:
+			return nil, contextCanceled
+		case <-canceled:
+			return nil, contextCanceled
+		}
+	}
+	pending := &hlsKeyRequest{done: make(chan struct{})}
+	if t.hlsKeyRequests == nil {
+		t.hlsKeyRequests = make(map[string]*hlsKeyRequest)
+	}
+	t.hlsKeyRequests[address] = pending
 	t.hlsKeyMu.Unlock()
-	req, cancel, err := hlsRequest(t, original, page, address)
+	pending.key, pending.err = m.readHLSKey(t, ctx, original, page, address)
+	t.hlsKeyMu.Lock()
+	delete(t.hlsKeyRequests, address)
+	if pending.err == nil {
+		if t.hlsKeys == nil {
+			t.hlsKeys = make(map[string][]byte)
+		}
+		t.hlsKeys[address] = pending.key
+	}
+	close(pending.done)
+	t.hlsKeyMu.Unlock()
+	return pending.key, pending.err
+}
+
+func (m *Manager) readHLSKey(t *Task, ctx context.Context, original, page *url.URL, address string) ([]byte, error) {
+	req, cancel, err := hlsRequestWithContext(t, ctx, original, page, address)
 	if err != nil {
 		return nil, err
 	}
@@ -137,12 +185,12 @@ func (m *Manager) hlsKey(t *Task, original, page *url.URL, address string) ([]by
 	if resp.ContentLength > 64 {
 		return nil, fmt.Errorf(i18n.T("HLS 密钥长度无效"))
 	}
-	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
+	body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
 	var data []byte
 	if resp.ContentLength >= 0 {
-		data, err = m.readExactMediaBody(t, body, resp.ContentLength, i18n.NewError("HLS 密钥长度无效"))
+		data, err = m.readExactMediaBodyWithCancel(t, body, resp.ContentLength, i18n.NewError("HLS 密钥长度无效"), req.Context().Done())
 	} else {
-		data, err = io.ReadAll(io.LimitReader(mediaNetworkReader{manager: m, task: t, source: body}, 65))
+		data, err = io.ReadAll(io.LimitReader(mediaNetworkReader{manager: m, task: t, source: body, canceled: req.Context().Done()}, 65))
 	}
 	if err != nil {
 		return nil, &responseReadError{err: err}
@@ -150,12 +198,6 @@ func (m *Manager) hlsKey(t *Task, original, page *url.URL, address string) ([]by
 	if len(data) != aes.BlockSize {
 		return nil, fmt.Errorf(i18n.T("HLS 密钥长度无效"))
 	}
-	t.hlsKeyMu.Lock()
-	if t.hlsKeys == nil {
-		t.hlsKeys = map[string][]byte{}
-	}
-	t.hlsKeys[address] = data
-	t.hlsKeyMu.Unlock()
 	return data, nil
 }
 
@@ -772,16 +814,22 @@ func (m *Manager) downloadResolvedMedia(t *Task, original, base *url.URL, segmen
 			}
 		}
 	}
+	journal := &mediaJournal{m: m, t: t}
+	defer journal.flushLog()
 	if live {
-		if err := m.recordHLSLive(t, out, progress, original, base, segments, count, records, ranges, mp4, expected, &safePrefix); err != nil {
+		if err := m.recordHLSLive(t, out, progress, original, base, segments, count, records, ranges, mp4, expected, &safePrefix, journal); err != nil {
 			return err
 		}
 	} else {
-		for _, segment := range segments[count:] {
-			if err := m.appendHLSSegment(t, out, progress, original, base, segment, ranges, mp4, expected, &safePrefix, false); err != nil {
-				return err
-			}
+		// 点播分片按有界流水线预取：并发取回、按序提交，fMP4 时间轴缝合
+		// 与检查点记账仍严格按分片顺序执行；预取失败只丢弃预取缓冲，
+		// 不影响已提交分片。
+		if err := m.prefetchHLSSegments(t, out, progress, original, base, segments[count:], ranges, mp4, expected, &safePrefix, journal); err != nil {
+			return err
 		}
+	}
+	if err := journal.flush(); err != nil {
+		return fmt.Errorf(i18n.T("无法保存 HLS 分片进度：%w"), err)
 	}
 	if err := out.Close(); err != nil {
 		return err
@@ -793,13 +841,23 @@ func (m *Manager) downloadResolvedMedia(t *Task, original, base *url.URL, segmen
 	return m.finishFile(t, part)
 }
 
-// appendHLSSegment 下载一个分片并推进检查点；只在完整写入并同步后落盘记录。
-func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgress, original, base *url.URL, segment hlsSegment, ranges map[string]hlsRangeState, mp4 *hlsMP4State, expected string, safePrefix *bool, live bool) error {
+// appendHLSSegment 串行下载并提交一个分片（直播与预取回退路径）；只在完整
+// 写入并同步后落盘记录。
+func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgress, original, base *url.URL, segment hlsSegment, ranges map[string]hlsRangeState, mp4 *hlsMP4State, expected string, safePrefix *bool, live bool, journal *mediaJournal) error {
 	start := t.done.Load()
 	var record hlsCheckpoint
 	if err := m.downloadHLSSegmentWithRetry(t, out, progress, original, base, segment, ranges, &record); err != nil {
 		return err
 	}
+	return m.commitHLSSegment(t, out, progress, segment, mp4, expected, safePrefix, live, start, &record, journal)
+}
+
+// commitHLSSegment 在分片字节落盘后执行容器校验、时间轴缝合、摘要与检查点
+// 记账。record.SHA256 是写入阶段的增量摘要；时间轴平移会改写已写入字节，
+// 此时退回 chunkDigest 磁盘回读，摘要才与落盘字节一致。journal 按条数或时
+// 间批量重写检查点，崩溃窗口内未记账的分片恢复时重新下载（hlsCheckpoint
+// 校验幂等），Sync 先于记账的顺序不变。
+func (m *Manager) commitHLSSegment(t *Task, out *os.File, progress *segmentProgress, segment hlsSegment, mp4 *hlsMP4State, expected string, safePrefix *bool, live bool, start int64, record *hlsCheckpoint, journal *mediaJournal) error {
 	record.End = t.done.Load()
 	if live {
 		record.LiveKey = hlsLiveKey(segment)
@@ -808,11 +866,6 @@ func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgr
 		if segment.init && len(mp4.tracks) > 0 {
 			// 重复初始化段：一致时跳过写入，但保留计划位置和远端版本。
 			if _, err := reuseInitialization(mp4, out, start, record.End); err != nil {
-				return err
-			}
-			var err error
-			record.SHA256, err = chunkDigest(out, chunkSpan{start: start, end: record.End - 1})
-			if err != nil {
 				return err
 			}
 			if err := out.Truncate(start); err != nil {
@@ -828,11 +881,10 @@ func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgr
 			progress.done.Store(start)
 			record.End, record.SkippedInit = start, true
 			t.checkpointMu.Lock()
-			t.hlsCompleted = append(t.hlsCompleted, record)
+			t.hlsCompleted = append(t.hlsCompleted, *record)
 			t.hlsSplice = mp4.spliceState()
-			err = m.saveTaskLocked(t)
 			t.checkpointMu.Unlock()
-			if err != nil {
+			if err := journal.saved(); err != nil {
 				return fmt.Errorf(i18n.T("无法保存 HLS 分片进度：%w"), err)
 			}
 			if record.Validator == "" {
@@ -845,6 +897,12 @@ func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgr
 			if err := mp4.shiftTfdt(out, start, record.End); err != nil {
 				return fmt.Errorf(i18n.T("HLS MP4 分片无效：%w"), err)
 			}
+			// 平移改写了落盘字节，增量摘要作废，退回磁盘回读。
+			digest, err := chunkDigest(out, chunkSpan{start: start, end: record.End - 1})
+			if err != nil {
+				return fmt.Errorf(i18n.T("无法校验 HLS 分片：%w"), err)
+			}
+			record.SHA256 = digest
 		}
 		if err := mp4.accept(out, start, record.End, segment.init); err != nil {
 			return fmt.Errorf(i18n.T("HLS MP4 分片无效：%w"), err)
@@ -856,17 +914,11 @@ func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgr
 	if err := out.Sync(); err != nil {
 		return fmt.Errorf(i18n.T("无法同步 HLS 分片：%w"), err)
 	}
-	var err error
-	record.SHA256, err = chunkDigest(out, chunkSpan{start: start, end: record.End - 1})
-	if err != nil {
-		return fmt.Errorf(i18n.T("无法校验 HLS 分片：%w"), err)
-	}
 	t.checkpointMu.Lock()
-	t.hlsCompleted = append(t.hlsCompleted, record)
+	t.hlsCompleted = append(t.hlsCompleted, *record)
 	t.hlsSplice = mp4.spliceState()
-	err = m.saveTaskLocked(t)
 	t.checkpointMu.Unlock()
-	if err != nil {
+	if err := journal.saved(); err != nil {
 		return fmt.Errorf(i18n.T("无法保存 HLS 分片进度：%w"), err)
 	}
 	if record.Validator == "" && expected == "" {
@@ -879,7 +931,7 @@ func (m *Manager) appendHLSSegment(t *Task, out *os.File, progress *segmentProgr
 // recordHLSLive 跟随直播清单录制新出现的分片，直到清单出现结束标签或任务
 // 被取消或用户请求结束；普通取消保留检查点。清单滚动中或瞬时不可读
 // 会等待重试，失败三次后报错，继续时可从检查点续录。
-func (m *Manager) recordHLSLive(t *Task, out *os.File, progress *segmentProgress, original, base *url.URL, window []hlsSegment, count int, records []hlsCheckpoint, ranges map[string]hlsRangeState, mp4 *hlsMP4State, expected string, safePrefix *bool) error {
+func (m *Manager) recordHLSLive(t *Task, out *os.File, progress *segmentProgress, original, base *url.URL, window []hlsSegment, count int, records []hlsCheckpoint, ranges map[string]hlsRangeState, mp4 *hlsMP4State, expected string, safePrefix *bool, journal *mediaJournal) error {
 	wake := t.beginLive()
 	m.notify()
 	defer func() { t.endLive(); m.notify() }()
@@ -917,7 +969,7 @@ func (m *Manager) recordHLSLive(t *Task, out *os.File, progress *segmentProgress
 			if seen[hlsLiveKey(segment)] || seen[hlsUnsequencedLiveKey(segment)] || seen[hlsLegacyLiveKey(segment.url)] {
 				continue
 			}
-			if err := m.appendHLSSegment(t, out, progress, original, base, segment, ranges, mp4, expected, safePrefix, true); err != nil {
+			if err := m.appendHLSSegment(t, out, progress, original, base, segment, ranges, mp4, expected, safePrefix, true, journal); err != nil {
 				if errors.Is(err, contextCanceled) {
 					return contextCanceled
 				}
@@ -995,7 +1047,7 @@ func (m *Manager) recordHLSLive(t *Task, out *os.File, progress *segmentProgress
 			if seen[hlsLiveKey(segment)] || seen[hlsUnsequencedLiveKey(segment)] || seen[hlsLegacyLiveKey(segment.url)] {
 				continue
 			}
-			if err := m.appendHLSSegment(t, out, progress, original, base, segment, ranges, mp4, expected, safePrefix, true); err != nil {
+			if err := m.appendHLSSegment(t, out, progress, original, base, segment, ranges, mp4, expected, safePrefix, true, journal); err != nil {
 				if errors.Is(err, contextCanceled) {
 					return contextCanceled
 				}
@@ -1014,19 +1066,7 @@ func (m *Manager) recordHLSLive(t *Task, out *os.File, progress *segmentProgress
 func (m *Manager) downloadHLSSegmentWithRetry(t *Task, out *os.File, progress *segmentProgress, original, page *url.URL, segment hlsSegment, ranges map[string]hlsRangeState, record *hlsCheckpoint) error {
 	start := t.done.Load()
 	previous, existed := ranges[segment.url]
-	for attempt := 0; ; attempt++ {
-		*record = hlsCheckpoint{}
-		err := m.downloadHLSSegment(t, out, progress, original, page, segment, ranges, record)
-		if err == nil {
-			return nil
-		}
-		var readErr *responseReadError
-		if !errors.As(err, &readErr) || !transientError(readErr) || attempt == maxRequestAttempts-1 {
-			return err
-		}
-		if err := waitRetry(t.cancel, time.Duration(250*(1<<attempt))*time.Millisecond); err != nil {
-			return err
-		}
+	return retryWithBackoff(t.cancel, maxRequestAttempts, 250*time.Millisecond, func() error {
 		if err := out.Truncate(start); err != nil {
 			return err
 		}
@@ -1040,7 +1080,11 @@ func (m *Manager) downloadHLSSegmentWithRetry(t *Task, out *os.File, progress *s
 		} else {
 			delete(ranges, segment.url)
 		}
-	}
+		return nil
+	}, func() error {
+		*record = hlsCheckpoint{}
+		return m.downloadHLSSegment(t, out, progress, original, page, segment, ranges, record)
+	})
 }
 
 // hlsRequest never forwards the original task's credentials to another origin.
@@ -1070,6 +1114,21 @@ func hlsRequest(t *Task, original, page *url.URL, address string) (*http.Request
 		}
 	}
 	return req, cancel, nil
+}
+
+func hlsRequestWithContext(t *Task, ctx context.Context, original, page *url.URL, address string) (*http.Request, func(), error) {
+	if ctx != nil && ctx.Err() != nil {
+		return nil, nil, contextCanceled
+	}
+	req, cancel, err := hlsRequest(t, original, page, address)
+	if err != nil || ctx == nil {
+		return req, cancel, err
+	}
+	stop := context.AfterFunc(ctx, cancel)
+	return req, func() {
+		stop()
+		cancel()
+	}, nil
 }
 
 // hlsPlaylistEnded 报告媒体清单是否带结束标签（点播）。
@@ -1119,26 +1178,24 @@ func (m *Manager) readHLSPlaylist(t *Task, original, page *url.URL, address stri
 }
 
 func (m *Manager) readHLSPlaylistWithWake(t *Task, original, page *url.URL, address string, wake <-chan struct{}) ([]byte, *url.URL, error) {
-	for attempt := 0; ; attempt++ {
-		data, base, err := m.readHLSPlaylistOnceWithWake(t, original, page, address, wake)
-		if err == nil {
-			return data, base, nil
-		}
-		var readErr *responseReadError
-		if !errors.As(err, &readErr) || !transientError(readErr) || attempt == maxRequestAttempts-1 {
-			return nil, nil, err
-		}
-		timer := time.NewTimer(time.Duration(250*(1<<attempt)) * time.Millisecond)
-		select {
-		case <-timer.C:
-		case <-t.cancel:
-			timer.Stop()
-			return nil, nil, contextCanceled
-		case <-wake:
-			timer.Stop()
-			return nil, nil, contextCanceled
-		}
+	var data []byte
+	var base *url.URL
+	var cancel <-chan struct{} = t.cancel
+	stop := func() {}
+	if wake != nil {
+		// wake 触发与任务取消同效：直播结束或清单切换时不再等待退避。
+		cancel, stop = mergeCancel(t.cancel, wake)
 	}
+	defer stop()
+	err := retryWithBackoff(cancel, maxRequestAttempts, 250*time.Millisecond, nil, func() error {
+		var err error
+		data, base, err = m.readHLSPlaylistOnceWithWake(t, original, page, address, wake)
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, base, nil
 }
 
 func (m *Manager) readHLSPlaylistOnce(t *Task, original, page *url.URL, address string) ([]byte, *url.URL, error) {
@@ -1178,7 +1235,7 @@ func (m *Manager) readHLSPlaylistOnceWithWake(t *Task, original, page *url.URL, 
 	if resp.ContentLength > maxHLSPlaylist {
 		return nil, nil, fmt.Errorf(i18n.T("HLS 清单超过大小限制"))
 	}
-	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
+	body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
 	var data []byte
 	if resp.ContentLength >= 0 {
 		data, err = m.readExactMediaBodyWithCancel(t, body, resp.ContentLength, i18n.NewError("HLS 清单超过大小限制"), req.Context().Done())
@@ -1238,16 +1295,25 @@ func (m *Manager) resolveHLSTS(t *Task, original, page *url.URL, address string,
 	return nil, nil, false, fmt.Errorf(i18n.T("没有可下载的 HLS 画质：%w"), lastErr)
 }
 
-func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentProgress, original, page *url.URL, segment hlsSegment, ranges map[string]hlsRangeState, record *hlsCheckpoint) error {
-	req, cancel, err := hlsRequest(t, original, page, segment.url)
-	if err != nil {
-		return err
+// openHLSSegment 打开分片响应并完成响应侧的全部强校验与资源状态登记：状态
+// 码、内容编码、最终地址、Content-Range 核对、跨重定向资源指纹与 If-Range
+// 强校验器都按原语义在此执行，ranges 的比对与登记也保持原顺序。预取并发取
+// 回时每个 worker 只读写自己的快照 map，按序提交时由协调方合并回共享
+// ranges，串行调用方则直接共享同一 map。同一资源（字节范围链）的取回由调
+// 用方串行化，因此比对读到的状态与串行下载完全一致。
+func (m *Manager) openHLSSegment(t *Task, ctx context.Context, original, page *url.URL, segment hlsSegment, ranges map[string]hlsRangeState, record *hlsCheckpoint) (*http.Response, func(), int64, error) {
+	fail := func(cancel func(), err error) (*http.Response, func(), int64, error) {
+		cancel()
+		return nil, nil, 0, err
 	}
-	defer cancel()
+	req, cancel, err := hlsRequestWithContext(t, ctx, original, page, segment.url)
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	previous, seen := ranges[segment.url]
 	if segment.indexResource != "" {
 		if seen && ((segment.indexValidator != "" && previous.validator != segment.indexValidator) || previous.resource != segment.indexResource || previous.total != segment.indexTotal) {
-			return i18n.NewError("DASH 索引对应的资源版本发生变化")
+			return fail(cancel, i18n.NewError("DASH 索引对应的资源版本发生变化"))
 		}
 		previous = hlsRangeState{validator: segment.indexValidator, resource: segment.indexResource, total: segment.indexTotal}
 		seen = true
@@ -1258,7 +1324,7 @@ func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentPro
 			hasChecksum := t.expectedSHA256 != ""
 			t.metaMu.Unlock()
 			if !hasChecksum {
-				return fmt.Errorf(i18n.T("HLS 字节范围缺少可靠的资源版本标识"))
+				return fail(cancel, fmt.Errorf(i18n.T("HLS 字节范围缺少可靠的资源版本标识")))
 			}
 		}
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", segment.start, segment.start+segment.length-1))
@@ -1268,29 +1334,31 @@ func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentPro
 	}
 	resp, err := m.doWithRetry(t, req)
 	if err != nil {
-		return err
+		return fail(cancel, err)
 	}
-	defer resp.Body.Close()
 	wantStatus := http.StatusOK
 	if segment.length > 0 {
 		wantStatus = http.StatusPartialContent
 	}
 	if resp.StatusCode != wantStatus {
-		return fmt.Errorf(i18n.T("读取 HLS 分片失败（HTTP %d）"), resp.StatusCode)
+		resp.Body.Close()
+		return fail(cancel, fmt.Errorf(i18n.T("读取 HLS 分片失败（HTTP %d）"), resp.StatusCode))
 	}
 	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
-		return fmt.Errorf(i18n.T("HLS 分片使用了不支持的内容编码"))
+		resp.Body.Close()
+		return fail(cancel, fmt.Errorf(i18n.T("HLS 分片使用了不支持的内容编码")))
 	}
 	if resp.Request == nil || resp.Request.URL == nil {
-		return fmt.Errorf(i18n.T("无法确认 HLS 分片的最终地址"))
+		resp.Body.Close()
+		return fail(cancel, fmt.Errorf(i18n.T("无法确认 HLS 分片的最终地址")))
 	}
 	initLimit := int64(maxHLSInitialization)
-	var plaintext []byte
 	if segment.keyURL != "" {
 		initLimit += aes.BlockSize
 	}
 	if segment.init && (segment.length > initLimit || resp.ContentLength > initLimit) {
-		return fmt.Errorf(i18n.T("HLS 初始化段超过 16 MiB"))
+		resp.Body.Close()
+		return fail(cancel, fmt.Errorf(i18n.T("HLS 初始化段超过 16 MiB")))
 	}
 	record.Resource = resourceFingerprint(resp.Request.URL)
 	record.Validator = strongValidator(resp.Header)
@@ -1299,37 +1367,94 @@ func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentPro
 		prefix := fmt.Sprintf("bytes %d-%d/", segment.start, segment.start+segment.length-1)
 		header := strings.TrimSpace(resp.Header.Get("Content-Range"))
 		if !strings.HasPrefix(header, prefix) {
-			return fmt.Errorf(i18n.T("HLS 分片范围响应无效"))
+			resp.Body.Close()
+			return fail(cancel, fmt.Errorf(i18n.T("HLS 分片范围响应无效")))
 		}
 		totalText := strings.TrimPrefix(header, prefix)
 		total, err := strconv.ParseInt(totalText, 10, 64)
 		if err != nil || strconv.FormatInt(total, 10) != totalText || total <= segment.start+segment.length-1 || (resp.ContentLength >= 0 && resp.ContentLength != segment.length) {
-			return fmt.Errorf(i18n.T("HLS 分片范围或长度无效"))
+			resp.Body.Close()
+			return fail(cancel, fmt.Errorf(i18n.T("HLS 分片范围或长度无效")))
 		}
 		validator := strongValidator(resp.Header)
 		if resp.Request == nil || resp.Request.URL == nil {
-			return fmt.Errorf(i18n.T("无法确认 HLS 分片的最终地址"))
+			resp.Body.Close()
+			return fail(cancel, fmt.Errorf(i18n.T("无法确认 HLS 分片的最终地址")))
 		}
 		resource := resourceFingerprint(resp.Request.URL)
 		if segment.indexResource != "" && ((segment.indexValidator != "" && validator != segment.indexValidator) || resource != segment.indexResource || total != segment.indexTotal) {
-			return i18n.NewError("DASH 索引对应的资源版本发生变化")
+			resp.Body.Close()
+			return fail(cancel, i18n.NewError("DASH 索引对应的资源版本发生变化"))
 		}
 		t.metaMu.Lock()
 		hasChecksum := t.expectedSHA256 != ""
 		t.metaMu.Unlock()
 		if seen && (previous.total != total || (!hasChecksum && (previous.resource != resource || previous.validator == "" || validator != previous.validator)) || (hasChecksum && validator != "" && previous.validator != "" && validator != previous.validator)) {
-			return fmt.Errorf(i18n.T("HLS 分片资源在下载期间发生变化"))
+			resp.Body.Close()
+			return fail(cancel, fmt.Errorf(i18n.T("HLS 分片资源在下载期间发生变化")))
 		}
 		if !seen {
 			ranges[segment.url] = hlsRangeState{validator: validator, total: total, resource: resource}
 		}
 		record.ResourceTotal = total
 	}
+	return resp, cancel, initLimit, nil
+}
+
+// checkHLSSegmentWritten 校验写入长度与响应声明一致，写完后确认字节范围
+// 响应没有超长；record.ResourceTotal 缺失时按实际写入长度补记。
+func checkHLSSegmentWritten(segment hlsSegment, body io.Reader, contentLength int64, record *hlsCheckpoint, written int64, verifyEOF bool) error {
+	if segment.init && written > maxHLSInitialization {
+		return fmt.Errorf(i18n.T("HLS 初始化段超过 16 MiB"))
+	}
+	if written == 0 || (!segment.mp4 && written%188 != 0) || (contentLength >= 0 && segment.keyURL == "" && written != contentLength) || (segment.length > 0 && segment.keyURL == "" && written != segment.length) {
+		return fmt.Errorf(i18n.T("HLS 分片长度无效"))
+	}
+	if record.ResourceTotal < 0 {
+		record.ResourceTotal = written
+	}
+	if verifyEOF {
+		var extra [1]byte
+		n, err := body.Read(extra[:])
+		if n != 0 {
+			if segment.length > 0 {
+				return i18n.NewError("HLS 分片范围响应超长")
+			}
+			return i18n.NewError("HLS 分片长度无效")
+		}
+		if err != io.EOF {
+			if err == nil {
+				err = io.ErrNoProgress
+			}
+			return &responseReadError{err: err}
+		}
+	}
+	return nil
+}
+
+func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentProgress, original, page *url.URL, segment hlsSegment, ranges map[string]hlsRangeState, record *hlsCheckpoint) error {
+	// Fetch the key before the segment occupies a connection slot.
+	var key []byte
+	if segment.keyURL != "" {
+		var err error
+		key, err = m.hlsKey(t, nil, original, page, segment.keyURL)
+		if err != nil {
+			return err
+		}
+	}
+	resp, cancel, initLimit, err := m.openHLSSegment(t, nil, original, page, segment, ranges, record)
+	if err != nil {
+		return err
+	}
+	defer cancel()
+	defer resp.Body.Close()
+	digest := newSegmentWriteDigest()
+	var plaintext []byte
 	var target io.Writer = out
 	if !segment.mp4 {
 		target = &tsWriter{w: out}
 	}
-	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
+	body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
 	var network io.Reader = body
 	if segment.keyURL != "" {
 		network = mediaNetworkReader{manager: m, task: t, source: body}
@@ -1348,10 +1473,6 @@ func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentPro
 		source = io.LimitReader(source, initLimit+1)
 	}
 	if segment.keyURL != "" {
-		key, err := m.hlsKey(t, original, page, segment.keyURL)
-		if err != nil {
-			return err
-		}
 		cipherLength := resp.ContentLength
 		if segment.length > 0 {
 			cipherLength = segment.length
@@ -1364,7 +1485,9 @@ func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentPro
 			return &responseReadError{err: io.ErrUnexpectedEOF}
 		}
 	}
-	writer := &segmentWriter{writer: target, segment: progress}
+	// 写入字节同时进入增量摘要，落盘后免去磁盘回读；时间轴平移改写过的
+	// 分片由提交阶段退回 chunkDigest。
+	writer := digest.wrap(&segmentWriter{writer: target, segment: progress})
 	var written int64
 	if segment.keyURL != "" {
 		written, err = writeHLSPlaintext(t, writer, plaintext)
@@ -1374,27 +1497,10 @@ func (m *Manager) downloadHLSSegment(t *Task, out *os.File, progress *segmentPro
 	if err != nil {
 		return err
 	}
-	if segment.init && written > maxHLSInitialization {
-		return fmt.Errorf(i18n.T("HLS 初始化段超过 16 MiB"))
+	verifyEOF := segment.length > 0 || (segment.keyURL != "" && resp.ContentLength >= 0)
+	if err := checkHLSSegmentWritten(segment, body, resp.ContentLength, record, written, verifyEOF); err != nil {
+		return err
 	}
-	if written == 0 || (!segment.mp4 && written%188 != 0) || (resp.ContentLength >= 0 && segment.keyURL == "" && written != resp.ContentLength) || (segment.length > 0 && segment.keyURL == "" && written != segment.length) {
-		return fmt.Errorf(i18n.T("HLS 分片长度无效"))
-	}
-	if record.ResourceTotal < 0 {
-		record.ResourceTotal = written
-	}
-	if segment.length > 0 {
-		var extra [1]byte
-		n, err := body.Read(extra[:])
-		if n != 0 {
-			return fmt.Errorf(i18n.T("HLS 分片范围响应超长"))
-		}
-		if err != io.EOF {
-			if err == nil {
-				err = io.ErrNoProgress
-			}
-			return &responseReadError{err: err}
-		}
-	}
+	record.SHA256 = digest.sum()
 	return nil
 }

@@ -290,7 +290,7 @@ func (m *Manager) downloadFTPRange(t *Task, source ftpSource, out *os.File, star
 	if segment != nil {
 		t.rangeBodyReady(segment, time.Since(requestStarted))
 	}
-	reader := idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel,
+	reader := &idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel,
 		selectTimeout: func() time.Duration { return m.automaticBodyTimeout(t, segment) }}
 	// FTP 的 REST 读到文件末尾；只收本区间长度后关闭数据连接。
 	var writer io.Writer = &offsetWriter{f: out, off: start, segment: segment}
@@ -565,7 +565,7 @@ func (m *Manager) downloadFTP(t *Task) error {
 	if _, err := out.Seek(offset, io.SeekStart); err != nil {
 		return err
 	}
-	reader := idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel}
+	reader := &idleReader{body: data, timeout: m.bodyIdleTimeout, cancel: cancel}
 	if _, err := m.copyWithProgress(t, out, reader); err != nil {
 		select {
 		case <-t.cancel:

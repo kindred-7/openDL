@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -128,6 +127,7 @@ type Task struct {
 	ticket                          *queueTicket // 当前排队或运行的名额，由 m.mu 保护
 	hlsKeyMu                        sync.Mutex
 	hlsKeys                         map[string][]byte // 按地址缓存的媒体密钥，不落盘
+	hlsKeyRequests                  map[string]*hlsKeyRequest
 	headers                         map[string]string
 	authProtocol                    string // guarded by metaMu; tokens and credentials are never persisted
 	conns                           int    // per-task Range connections; 0 is the manager default
@@ -536,30 +536,29 @@ func (m *Manager) queuePace(queue string) *paceLimiter {
 	return m.queuePaces[queue]
 }
 
-// acquirePaced 先取队列额度再取全局额度；持有较窄的队列额度等待全局额度，
-// 不挤压其他队列。返回本次可读字节数与退还函数。
+// acquirePaced 先取全局额度再取队列额度：全局令牌被所有任务共享且恢复最慢，
+// 不应先占住队列份额再干等全局。先取得全局令牌后，队列等待失败立即把全局
+// 份额完整退还（退还干净），不留悬挂；发放取两者较小值，短读按实际用量分
+// 别退还。多任务公平性由 paceLimiter 按任务轮转（pace.go）保证。
 func (m *Manager) acquirePaced(t *Task, size int, canceled <-chan struct{}) (int, func(int), error) {
+	allowance, err := m.pace.acquire(t, size, canceled)
+	if err != nil {
+		return 0, nil, err
+	}
 	limiter := m.queuePace(t.queue)
 	var queueAllowance readAllowance
 	if limiter != nil {
-		allowance, err := limiter.acquire(size, canceled)
+		queueAllowance, err = limiter.acquire(t, size, canceled)
 		if err != nil {
+			m.pace.refund(allowance, 0)
 			return 0, nil, err
 		}
-		queueAllowance = allowance
 	}
-	allowance, err := m.pace.acquire(size, canceled)
-	if err != nil {
-		if limiter != nil {
-			limiter.refund(queueAllowance, 0)
-		}
-		return 0, nil, err
+	granted := allowance.bytes
+	if limiter != nil && queueAllowance.bytes < granted {
+		granted = queueAllowance.bytes
 	}
-	bytes := allowance.bytes
-	if limiter != nil && queueAllowance.bytes < bytes {
-		bytes = queueAllowance.bytes
-	}
-	return bytes, func(actual int) {
+	return granted, func(actual int) {
 		m.pace.refund(allowance, actual)
 		if limiter != nil {
 			limiter.refund(queueAllowance, actual)
@@ -1461,18 +1460,9 @@ func (m *Manager) run(t *Task, ticket *queueTicket) {
 	speedStop := make(chan struct{})
 	speedDone := make(chan struct{})
 	go m.sampleSpeed(t, speedStop, speedDone, time.Now(), t.transferred.Load())
-	var downloadErr error
-	for attempt := 0; attempt < maxRequestAttempts; attempt++ {
-		downloadErr = m.download(t)
-		var readErr *responseReadError
-		if downloadErr == nil || !errors.As(downloadErr, &readErr) || !transientError(readErr) || attempt == maxRequestAttempts-1 {
-			break
-		}
-		if err := waitRetry(t.cancel, time.Duration(250*(1<<attempt))*time.Millisecond); err != nil {
-			downloadErr = err
-			break
-		}
-	}
+	downloadErr := retryWithBackoff(t.cancel, maxRequestAttempts, 250*time.Millisecond, nil, func() error {
+		return m.download(t)
+	})
 	close(speedStop)
 	<-speedDone
 	t.metaMu.Lock()
@@ -1681,12 +1671,18 @@ func (m *Manager) download(t *Task) error {
 	}
 	rangePermitted := t.rangeSupport.Load() != 1
 	if t.conns == -1 {
-		// Keep the already accepted plain GET when capability is unknown or
-		// the endpoint issues one-use download tokens. Never consume that
-		// response just to probe it again with bounded Range requests.
-		rangePermitted = t.rangeSupport.Load() == 2 && !singleResponseDownload(req.URL)
-		if resp.Request != nil && singleResponseDownload(resp.Request.URL) {
-			rangePermitted = false
+		oneUse := singleResponseDownload(req.URL) || (resp.Request != nil && singleResponseDownload(resp.Request.URL))
+		rangePermitted = !oneUse && t.rangeSupport.Load() == 2
+		if !rangePermitted && !oneUse && t.rangeSupport.Load() == 0 && resp.Request != nil && resp.Request.URL != nil &&
+			total >= 256<<10 && validator != "" {
+			// 部分服务器支持范围请求但不发 Accept-Ranges：用 bytes=0-0 探测
+			// 确认 206 后进入分段；失败保持单流，行为与探测前一致。只对有
+			// 强校验器的资源探测：If-Range 把各分段钉在同一表示上，缺校验
+			// 器时分段只能无条件续传，可能混入其他表示的字节，维持单流。
+			if m.probeRangeSupport(t, resp.Request.Clone(context.Background()), total, validator) {
+				t.rangeSupport.Store(2)
+				rangePermitted = true
+			}
 		}
 	}
 	if total >= 256<<10 && rangePermitted && (validator != "" || expected != "" || allowUnverified) {
@@ -1725,7 +1721,18 @@ func (m *Manager) download(t *Task) error {
 		sameResource := validator != "" && validator == t.resumeValidator && resource == t.resumeResource
 		githubRefresh := githubCandidate && githubVerified && stable == t.resumeStableResource && validator == t.resumeValidator && total == t.resumeTotal
 		unverified := !sameResource && !githubRefresh && expected == ""
-		if invalidated || (t.resumeUnverified && expected == "" && !allowUnverified) || (unverified && !allowUnverified) || total != t.resumeTotal || statErr != nil || info.Size() != total {
+		reuse := resumeChunksReusable(resumeChunksFacts{
+			invalidated:      invalidated,
+			resumeUnverified: t.resumeUnverified,
+			unverified:       unverified,
+			allowUnverified:  allowUnverified,
+			expected:         expected,
+			total:            total,
+			resumeTotal:      t.resumeTotal,
+			statOK:           statErr == nil,
+			size:             info.Size(),
+		})
+		if !reuse {
 			t.completed = nil
 			t.done.Store(0)
 			t.resumeUnverified = false
@@ -1843,6 +1850,35 @@ func (m *Manager) download(t *Task) error {
 	return m.downloadSingle(t, part, resp, cancelReq)
 }
 
+// resumeChunksFacts 是续传复用决策的全部输入。
+type resumeChunksFacts struct {
+	invalidated      bool   // 上次校验失败的摘要与本次期望一致，旧块不可信
+	resumeUnverified bool   // 已有块当初就未证明资源身份
+	unverified       bool   // 本次资源身份同样无法证明
+	allowUnverified  bool   // 允许身份不明的续传
+	expected         string // 发布方 SHA-256；空表示没有整文件校验兜底
+	total            int64
+	resumeTotal      int64
+	statOK           bool // 临时文件元数据可读
+	size             int64
+}
+
+// resumeChunksReusable 判定已完成块能否整体复用：纯函数，不接触任务状态，
+// 由调用方落盘与应用。身份或大小不符、上次校验失败、身份不明且未获允许
+// 都必须整体重下；只有完全一致的资源才保留检查点。
+func resumeChunksReusable(f resumeChunksFacts) bool {
+	if f.invalidated {
+		return false
+	}
+	if f.resumeUnverified && f.expected == "" && !f.allowUnverified {
+		return false
+	}
+	if f.unverified && !f.allowUnverified {
+		return false
+	}
+	return f.total == f.resumeTotal && f.statOK && f.size == f.total
+}
+
 func (t *Task) checkExpectedBytes(size int64) error {
 	if t.expectedBytes > 0 && size >= 0 && size != t.expectedBytes {
 		return fmt.Errorf(i18n.T("邮箱返回了 %d 字节，原附件应为 %d 字节。请从原邮件重新下载"), size, t.expectedBytes)
@@ -1890,7 +1926,7 @@ func (m *Manager) downloadSingle(t *Task, part string, resp *http.Response, canc
 		}
 	}()
 
-	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel,
+	body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel,
 		selectTimeout: func() time.Duration { return m.automaticBodyTimeout(t, segment) }}
 	written, err := m.copyWithProgress(t, &segmentWriter{writer: out, segment: segment}, body)
 	if err != nil {
@@ -1925,810 +1961,6 @@ func (m *Manager) downloadSingle(t *Task, part string, resp *http.Response, canc
 type chunkSpan struct {
 	start, end int64
 	digest     string
-}
-
-// Keep very large downloads from assigning hundreds of megabytes to one
-// connection: shorter claims leave work available to faster workers for longer.
-const maxAssignedChunkSize int64 = 64 << 20
-
-func assignedChunkLimit(total, conns, minSize int64) int64 {
-	return max(min(maxAssignedChunkSize, max(int64(4<<20), total/conns/4)), minSize)
-}
-
-// chunkQ assigns the largest unclaimed range first.
-type chunkQ struct {
-	mu             sync.Mutex
-	task           *Task
-	chunks         []chunkSpan
-	sequential     bool              // a single worker fills the earliest remaining range first
-	automatic      bool              // automatic scheduling favors long, useful responses
-	checkpoints    *rangeCheckpoints // immutable once the task's workers start
-	steady         atomic.Bool       // stable target permits longer uninterrupted claims
-	target         *atomic.Int32     // desired workers, assigned before workers start
-	stopped        bool
-	active         map[*chunkWork]struct{}
-	wake           chan struct{}
-	workerRates    map[int]int64 // last completed useful rate for each worker, guarded by mu
-	workerFinished map[int]time.Time
-	refusalEpoch   atomic.Uint64
-	refusalUntil   time.Time
-	refusedRanges  map[int64]int
-	refusalCap     int32
-	refusalBatches int
-}
-
-// Additional-request rejection is task-local evidence. Keep healthy responses
-// intact, constrain new dispatch once per batch, and bound requeues per range.
-func (q *chunkQ) deferRefused(work *chunkWork, target *atomic.Int32) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	if q.stopped || target == nil {
-		return false
-	}
-	if q.refusedRanges == nil {
-		q.refusedRanges = make(map[int64]int)
-	}
-	q.refusedRanges[work.span.start]++
-	if q.refusedRanges[work.span.start] > 3 {
-		return false
-	}
-	now := time.Now()
-	if !now.Before(q.refusalUntil) {
-		next := max(1, target.Load()/2)
-		if q.refusalBatches > 0 {
-			next = 1
-		}
-		q.refusalBatches++
-		target.Store(next)
-		q.refusalCap = next
-		q.task.effectiveConnections.Store(next)
-		q.refusalUntil = now.Add(autoConnectionPressureInterval)
-		q.refusalEpoch.Add(1)
-	}
-	q.signalLocked()
-	return true
-}
-
-type chunkWork struct {
-	span    chunkSpan
-	ctx     context.Context
-	cancel  context.CancelFunc
-	segment *segmentProgress // guarded by q.mu
-	started time.Time
-	stolen  bool // guarded by q.mu
-	worker  int
-}
-
-// retire cancels excess workers so that a lower automatic target takes effect
-// without waiting for their entire current ranges to finish. Their completed
-// prefixes are committed as ordinary checkpoints before the tail is requeued.
-func (q *chunkQ) retire(target int32) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for work := range q.active {
-		if int32(work.worker) >= target && !work.stolen && work.segment != nil && work.segment.bodyReady.Load() && work.segment.done.Load() > 0 && !work.segment.integrityPending.Load() {
-			work.stolen = true
-			work.cancel()
-		}
-	}
-	q.signalLocked()
-}
-
-// excessActive reports work that still belongs to a retired worker. A new
-// automatic sample must not include bytes from these old connections.
-func (q *chunkQ) excessActive(target int32) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	for work := range q.active {
-		if int32(work.worker) >= target {
-			return true
-		}
-	}
-	return false
-}
-
-func (q *chunkQ) signalLocked() {
-	if q.wake != nil {
-		close(q.wake)
-	}
-	q.wake = make(chan struct{})
-}
-
-// stop prevents any additional claims while in-flight chunks finish.
-func (q *chunkQ) stop() {
-	q.mu.Lock()
-	q.stopped = true
-	q.signalLocked()
-	q.mu.Unlock()
-}
-
-// take hands out part of the largest unclaimed range, bounded by maxSize.
-func (q *chunkQ) take(minSize, maxSize int64) (chunkSpan, bool) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return q.takeLocked(minSize, maxSize, -1)
-}
-
-func (q *chunkQ) takeLocked(minSize, maxSize, nextOffset int64) (chunkSpan, bool) {
-	if q.stopped || len(q.chunks) == 0 {
-		return chunkSpan{}, false
-	}
-	best := 0
-	preferred := -1
-	for i := range q.chunks {
-		if q.chunks[i].start == nextOffset {
-			preferred = i
-		}
-		if (q.sequential && q.chunks[i].start < q.chunks[best].start) ||
-			(!q.sequential && q.chunks[i].end-q.chunks[i].start > q.chunks[best].end-q.chunks[best].start) {
-			best = i
-		}
-	}
-	if preferred >= 0 && !q.sequential {
-		best = preferred
-	}
-	c := q.chunks[best]
-	size := c.end - c.start + 1
-	if size > maxSize && size-maxSize >= minSize {
-		q.chunks[best] = chunkSpan{start: c.start + maxSize, end: c.end}
-		return chunkSpan{start: c.start, end: c.start + maxSize - 1}, true
-	}
-	claimMinimum := minSize
-	if q.target != nil {
-		var throughput int64
-		for _, rate := range q.workerRates {
-			throughput += max(0, rate)
-		}
-		claimMinimum = max(claimMinimum, automaticSplitMinimum(throughput))
-	}
-	if q.target != nil && len(q.active)+len(q.chunks) < int(q.target.Load()) && size >= 2*claimMinimum {
-		// A resumed file can have fewer gaps than available workers. Split
-		// only while extra parallel work is needed, leaving both halves useful.
-		mid := c.start + size/2 - 1
-		q.chunks[best] = chunkSpan{start: mid + 1, end: c.end}
-		return chunkSpan{start: c.start, end: mid}, true
-	}
-	// Otherwise keep the range whole to avoid short requests and checkpoints.
-	q.chunks = append(q.chunks[:best], q.chunks[best+1:]...)
-	return c, true
-}
-
-// splitLocked publishes at most one non-overlapping tail. q.mu is held;
-// segment.splitMu is acquired before changing the writer's exclusive boundary.
-func (q *chunkQ) splitLocked(minSize int64, worker int) bool {
-	if q.automatic && q.checkpoints != nil && q.checkpoints.backlogged() {
-		return false
-	}
-	helperRate := q.workerRates[worker]
-	var throughput int64
-	for work := range q.active {
-		if work.segment != nil && work.segment.bodyReady.Load() {
-			rate := max(0, work.segment.speed.Load())
-			helperRate = max(helperRate, rate)
-			throughput += rate
-		}
-	}
-	setup := time.Duration(q.task.rangeSetupNanos.Load())
-	if setup <= 0 {
-		setup = 250 * time.Millisecond
-	}
-	commit := time.Duration(q.task.rangeCommitNanos.Load())
-	if q.checkpoints != nil {
-		// Journal syncs are batched independently of response boundaries.
-		commit = 0
-	}
-	minimum := minSize
-	if q.target != nil {
-		minimum = max(minSize, automaticSplitMinimum(throughput))
-	}
-	for pass := 0; pass < 2; pass++ {
-		var candidate *chunkWork
-		var largest int64
-		var longest float64
-		for work := range q.active {
-			segment := work.segment
-			if work.stolen || segment == nil || !segment.bodyReady.Load() || segment.integrityPending.Load() {
-				continue
-			}
-			if q.target != nil && segment.routeEpoch.Load() != q.task.rangeRouteEpoch.Load() {
-				continue
-			}
-			readyAt := segment.bodyStarted.Load()
-			if readyAt <= 0 {
-				continue
-			}
-			age := time.Since(segment.created) - time.Duration(readyAt)
-			if age < 2*time.Second {
-				continue
-			}
-			done := segment.done.Load()
-			left := work.span.end - work.span.start + 1 - done
-			if left < 2*minimum {
-				continue
-			}
-			speed := segment.speed.Load()
-			if q.automatic {
-				// Splitting a healthy body closes its original response early.
-				// Require seconds of useful work on both sides; micro rescue is
-				// reserved for stalled bodies, not small but progressing tails.
-				if (pass > 0 && (speed > 0 || age < 5*time.Second)) ||
-					(speed > 0 && helperRate > 0 && float64(left) < (float64(speed)+float64(helperRate))*8) {
-					continue
-				}
-			}
-			if done < minimum/2 && (speed > 0 || age < 5*time.Second) {
-				continue
-			}
-			if _, useful := planRangeSplit(left, minimum, speed, helperRate, setup, commit); !useful {
-				continue
-			}
-			eta := float64(0)
-			if speed > 0 {
-				eta = float64(left) / float64(speed)
-			} else if age >= 5*time.Second {
-				eta = 1e30
-			}
-			if candidate == nil || eta > longest || (eta == longest && left > largest) {
-				candidate, largest, longest = work, left, eta
-			}
-		}
-		if candidate != nil {
-			segment := candidate.segment
-			segment.splitMu.Lock()
-			position := candidate.span.start + segment.done.Load()
-			remaining := candidate.span.end - position + 1
-			keep, useful := planRangeSplit(remaining, minimum, segment.speed.Load(), helperRate, setup, commit)
-			if useful && segment.bodyReady.Load() && !segment.integrityPending.Load() {
-				boundary := position + keep
-				q.chunks = append(q.chunks, chunkSpan{start: boundary, end: candidate.span.end})
-				candidate.span.end = boundary - 1
-				segment.writeLimit = boundary
-				q.task.segmentMu.Lock()
-				segment.end = boundary - 1
-				q.task.segmentMu.Unlock()
-				segment.splitMu.Unlock()
-				q.signalLocked()
-				return true
-			}
-			segment.splitMu.Unlock()
-		}
-		if q.target == nil || minimum <= minSize {
-			break
-		}
-		// Only a failed normal pass enables micro rescue; both sides still
-		// keep at least the absolute minimum, so tiny equal tails cannot cascade.
-		minimum = minSize
-	}
-	return false
-}
-
-// claim waits while a peer is working. If no unclaimed data remains, it splits
-// a slow peer's remaining range without interrupting its current prefix.
-func (q *chunkQ) claim(ctx context.Context, minSize, maxSize, nextOffset int64, worker int, target *atomic.Int32) (*chunkWork, bool) {
-	for {
-		q.mu.Lock()
-		if q.stopped || ctx.Err() != nil {
-			q.mu.Unlock()
-			return nil, false
-		}
-		if target != nil && int32(worker) >= target.Load() {
-			q.mu.Unlock()
-			return nil, true
-		}
-		if span, ok := q.takeLocked(minSize, maxSize, nextOffset); ok {
-			workCtx, cancel := context.WithCancel(ctx)
-			work := &chunkWork{span: span, ctx: workCtx, cancel: cancel, started: time.Now(), worker: worker}
-			if q.active == nil {
-				q.active = make(map[*chunkWork]struct{})
-			}
-			q.active[work] = struct{}{}
-			q.mu.Unlock()
-			return work, true
-		}
-		if len(q.active) == 0 {
-			q.mu.Unlock()
-			return nil, false
-		}
-		if q.splitLocked(minSize, worker) {
-			q.mu.Unlock()
-			continue
-		}
-		if q.wake == nil {
-			q.wake = make(chan struct{})
-		}
-		wake := q.wake
-		q.mu.Unlock()
-		timer := time.NewTimer(500 * time.Millisecond)
-		select {
-		case <-ctx.Done():
-		case <-wake:
-		case <-timer.C:
-		}
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}
-}
-
-func (q *chunkQ) activate(work *chunkWork, segment *segmentProgress) {
-	q.mu.Lock()
-	work.segment = segment
-	q.mu.Unlock()
-}
-
-func (q *chunkQ) wasStolen(work *chunkWork) bool {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	return work.stolen
-}
-
-func (q *chunkQ) finish(work *chunkWork, tail *chunkSpan) {
-	q.mu.Lock()
-	if work.segment != nil && !work.segment.active.Load() && !q.stopped && (q.target == nil || work.segment.routeEpoch.Load() == q.task.rangeRouteEpoch.Load()) {
-		started := work.segment.bodyStarted.Load()
-		if bytes := work.segment.done.Load(); started > 0 && bytes > 0 {
-			elapsed := (time.Since(work.segment.created) - time.Duration(started)).Seconds()
-			if elapsed > 0 {
-				if q.workerRates == nil {
-					q.workerRates = make(map[int]int64)
-				}
-				if q.workerFinished == nil {
-					q.workerFinished = make(map[int]time.Time)
-				}
-				q.workerRates[work.worker] = int64(float64(bytes) / elapsed)
-				q.workerFinished[work.worker] = time.Now()
-			}
-		}
-	}
-	delete(q.active, work)
-	if tail != nil && !q.stopped {
-		q.chunks = append(q.chunks, *tail)
-	}
-	q.signalLocked()
-	q.mu.Unlock()
-	work.cancel()
-}
-
-// splitFetcher 取回一个区间写入文件；HTTP 范围与 FTP 分段共用动态分段驱动。
-type splitFetcher func(out *os.File, start, end int64, validator string, segment *segmentProgress, splitCtx context.Context) (int64, error)
-
-// downloadSplit runs ranged workers over the dynamic chunk list, writing
-// into one pre-sized file.
-func (m *Manager) downloadSplit(t *Task, part string, total int64, validator, cooldownOrigin string, fetch splitFetcher) error {
-	out, err := os.OpenFile(extendedPath(part), os.O_RDWR|os.O_CREATE, 0o644)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if err := m.prepareOutputLimit(t, out, total); err != nil {
-		return err
-	}
-	if err := out.Truncate(total); err != nil {
-		return err
-	}
-
-	// Chunks smaller than this cost more in request overhead than they gain
-	// in parallelism.
-	automatic := t.conns == -1
-	conns := t.conns
-	if automatic {
-		// Keep workers available for limits that may be raised during a run;
-		// the automatic target below still respects the current limits.
-		conns = 64
-		if total <= 2<<20 {
-			conns = 1
-		}
-	} else if conns <= 0 {
-		m.mu.Lock()
-		conns = m.conns
-		m.mu.Unlock()
-	}
-	if conns < 1 {
-		conns = 1
-	}
-	minSize := int64(1 << 20)
-	if total < 4<<20 {
-		minSize = max(int64(64<<10), total/8)
-	}
-	if automatic {
-		// Idle workers can divide a slow tail down to useful 64 KiB pieces.
-		minSize = 64 << 10
-	}
-	if avg := total / int64(conns); avg > 0 && avg < minSize {
-		minSize = avg
-	}
-	if minSize < 64<<10 {
-		minSize = 64 << 10
-	}
-	// Bound claims even for very large files, balancing request/checkpoint
-	// overhead against work left available to faster connections.
-	maxSize := assignedChunkLimit(total, int64(conns), minSize)
-	t.checkpointMu.Lock()
-	completed := append([]chunkSpan(nil), t.completed...)
-	t.checkpointMu.Unlock()
-	if m.storeDir != "" {
-		valid := completed[:0]
-		var done int64
-		for _, chunk := range completed {
-			digest, err := chunkDigest(out, chunk)
-			if err == nil && digest == chunk.digest && digest != "" {
-				valid = append(valid, chunk)
-				done += chunk.end - chunk.start + 1
-			}
-		}
-		completed = valid
-		t.checkpointMu.Lock()
-		t.completed = append([]chunkSpan(nil), completed...)
-		t.done.Store(done)
-		err := m.saveTaskLocked(t)
-		t.checkpointMu.Unlock()
-		if err != nil {
-			return fmt.Errorf(i18n.T("无法保存下载记录：%w"), err)
-		}
-	}
-	t.resetSegments(completed)
-	sort.Slice(completed, func(i, j int) bool { return completed[i].start < completed[j].start })
-	q := &chunkQ{task: t, sequential: conns == 1, automatic: automatic}
-	t.rangeRouteEpoch.Store(m.autoConnRouteEpoch.Load())
-	var next int64
-	for _, chunk := range completed {
-		if next < chunk.start {
-			q.chunks = append(q.chunks, chunkSpan{start: next, end: chunk.start - 1})
-		}
-		next = chunk.end + 1
-	}
-	if next < total {
-		q.chunks = append(q.chunks, chunkSpan{start: next, end: total - 1})
-	}
-	// Spread initial claims across the file instead of repeatedly taking
-	// short chunks from the beginning of one large remaining range. Split
-	// only uncompleted gaps, so resumed checkpoints remain untouched.
-	distribution := min(conns, int(total/minSize)+1)
-	if automatic {
-		// Spread only the initial batch. A resource ceiling of 64 must not
-		// pre-fragment a file into 64 tiny requests before growth is justified.
-		distribution = min(distribution, int(autoConnectionInitial(int32(conns), total)))
-	}
-	if distribution > 1 {
-		var distributed []chunkSpan
-		for _, gap := range q.chunks {
-			start := gap.start
-			for i := int64(1); i < int64(distribution); i++ {
-				boundary := (total/int64(distribution))*i + (total%int64(distribution))*i/int64(distribution)
-				if boundary <= start || boundary > gap.end {
-					continue
-				}
-				distributed = append(distributed, chunkSpan{start: start, end: boundary - 1})
-				start = boundary
-			}
-			distributed = append(distributed, chunkSpan{start: start, end: gap.end})
-		}
-		q.chunks = distributed
-	}
-
-	workers := conns
-	if w := int(total/minSize) + 1; w < workers {
-		workers = w
-	}
-	var wg sync.WaitGroup
-	var errMu sync.Mutex
-	var firstErr error
-	splitCtx, stopSplit := context.WithCancel(context.Background())
-	defer stopSplit()
-	go func() {
-		select {
-		case <-t.cancel:
-			stopSplit()
-		case <-splitCtx.Done():
-		}
-	}()
-	fail := func(err error) {
-		errMu.Lock()
-		if firstErr == nil {
-			firstErr = err
-			q.stop()
-			stopSplit()
-		}
-		errMu.Unlock()
-	}
-	var checkpoints *rangeCheckpoints
-	if automatic && m.storeDir != "" {
-		checkpoints = newRangeCheckpoints(m, t, out, func(err error) {
-			fail(fmt.Errorf(i18n.T("无法保存分段进度：%w"), err))
-		})
-		q.checkpoints = checkpoints
-	}
-	var target atomic.Int32
-	var rollbackEpoch atomic.Uint64
-	target.Store(int32(workers))
-	q.target = &target
-	t.effectiveConnections.Store(int32(workers))
-	var autoDone chan struct{}
-	if automatic {
-		// Estimate immediately from size and CPU capacity; bandwidth samples
-		// refine the target without reusing another task's measurements.
-		initial := m.automaticConnectionCeiling(t, workers, cooldownOrigin)
-		initial = min(initial, int32(autoConnectionBudget(total-t.done.Load(), runtime.NumCPU())))
-		initial = autoConnectionInitial(initial, total-t.done.Load())
-		if cooldownOrigin != "" && (m.isOriginCooling(cooldownOrigin) || t.rangeSupport.Load() != 2) {
-			initial = 1
-		}
-		target.Store(initial)
-		t.effectiveConnections.Store(initial)
-		routeEpoch := m.autoConnRouteEpoch.Load()
-		autoDone = make(chan struct{})
-		go func() {
-			defer close(autoDone)
-			m.adaptConnections(splitCtx, t, q, &target, &rollbackEpoch, workers, total, minSize, cooldownOrigin, routeEpoch)
-		}()
-	}
-
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func(index int) {
-			defer wg.Done()
-			nextOffset := int64(-1)
-			progressRetries := 0
-			for {
-				for automatic && int32(index) >= target.Load() {
-					q.mu.Lock()
-					done := q.stopped || (len(q.chunks) == 0 && len(q.active) == 0)
-					q.mu.Unlock()
-					if done {
-						return
-					}
-					select {
-					case <-splitCtx.Done():
-						return
-					case <-time.After(250 * time.Millisecond):
-					}
-				}
-				var autoTarget *atomic.Int32
-				if automatic {
-					autoTarget = &target
-				}
-				claimSize := maxSize
-				if automatic {
-					// A single-stream baseline must not be forced into the small
-					// chunks calculated for the maximum possible worker count.
-					claimSize = assignedChunkLimit(total, int64(max(target.Load(), 1)), minSize)
-					if total > 2<<20 {
-						q.mu.Lock()
-						rate := q.workerRates[index]
-						q.mu.Unlock()
-						// Do not reapply the fixed-mode 64 MiB ceiling to fast
-						// automatic streams: it would force subsecond requests.
-						claimSize = automaticClaimLimit(max(minSize, total-t.done.Load()), minSize, rate,
-							time.Duration(t.rangeSetupNanos.Load()), q.steady.Load())
-					}
-				}
-				work, ok := q.claim(splitCtx, minSize, claimSize, nextOffset, index, autoTarget)
-				if !ok {
-					return
-				}
-				if work == nil {
-					continue
-				}
-				c := work.span
-				segment := t.startSegment(c)
-				if checkpoints != nil {
-					segment.checkpoint = checkpoints.stream(c.start)
-				}
-				q.activate(work, segment)
-				var written int64
-				var err error
-				var tail *chunkSpan
-				attempts := maxRequestAttempts
-				if automatic {
-					attempts = 5
-				}
-				for attempt := 0; attempt < attempts; attempt++ {
-					written, err = fetch(out, c.start, c.end, validator, segment, work.ctx)
-					q.mu.Lock()
-					c.end = work.span.end
-					q.mu.Unlock()
-					if errors.Is(err, errChunkBoundary) && !segment.integrityPending.Load() {
-						err = nil
-					}
-					if err == nil {
-						break
-					}
-					var refused *connectionRefusalError
-					if automatic && errors.As(err, &refused) && q.deferRefused(work, &target) {
-						// No body was accepted. Return ownership only after fetch
-						// exited; the existing healthy writers remain untouched.
-						if waitErr := waitRetry(splitCtx.Done(), 2*time.Second); waitErr != nil {
-							err = waitErr
-						} else {
-							tail = &chunkSpan{start: c.start, end: c.end}
-							err = nil
-						}
-						break
-					}
-					var interruptedRead *responseReadError
-					if automatic && written >= 256<<10 && written < c.end-c.start+1 &&
-						!segment.integrityPending.Load() && splitCtx.Err() == nil && progressRetries < 20 &&
-						errors.As(err, &interruptedRead) && transientError(interruptedRead) {
-						// Headers already validated this prefix. Commit it through
-						// the ordinary sync/hash/checkpoint path before resuming the
-						// tail; bounded per-worker progress recovery avoids both
-						// redownloading useful data and endless trickle reconnects.
-						progressRetries++
-						rollbackEpoch.Add(1)
-						tail = &chunkSpan{start: c.start + written, end: c.end}
-						c.end = c.start + written - 1
-						t.segmentMu.Lock()
-						segment.end = c.end
-						t.segmentMu.Unlock()
-						err = nil
-						break
-					}
-					paused := false
-					select {
-					case <-t.cancel:
-						paused = true
-					default:
-					}
-					if paused && written > 0 && !segment.integrityPending.Load() &&
-						(errors.Is(err, contextCanceled) || errors.Is(err, context.Canceled) || errors.As(err, &interruptedRead)) {
-						// Preserve a safely written prefix as an ordinary checked
-						// checkpoint. Auth-int responses must instead reach EOF.
-						c.end = c.start + written - 1
-						t.segmentMu.Lock()
-						segment.end = c.end
-						t.segmentMu.Unlock()
-						err = nil
-						break
-					}
-					if splitCtx.Err() == nil && work.ctx.Err() != nil && !segment.integrityPending.Load() && q.wasStolen(work) &&
-						(errors.Is(err, contextCanceled) || errors.Is(err, context.Canceled) || errors.As(err, &interruptedRead)) {
-						remaining := chunkSpan{start: c.start + written, end: c.end}
-						if remaining.start <= remaining.end {
-							tail = &remaining
-						}
-						if written > 0 {
-							c.end = c.start + written - 1
-							t.segmentMu.Lock()
-							segment.end = c.end
-							t.segmentMu.Unlock()
-						}
-						err = nil
-						break
-					}
-					if checkpoints != nil {
-						// Retraction must be durable before this attempt's bytes
-						// can be overwritten or reassigned to another request.
-						if checkpointErr := segment.checkpoint.discard(); checkpointErr != nil {
-							t.removeSegment(segment)
-							fail(fmt.Errorf(i18n.T("无法保存分段进度：%w"), checkpointErr))
-							q.finish(work, nil)
-							return
-						}
-						segment.checkpoint = checkpoints.stream(c.start)
-					}
-					rollbackEpoch.Add(1)
-					t.done.Add(-written) // a retry must not double-count
-					segment.done.Store(0)
-					t.segmentMu.Lock()
-					segment.written.Store(0)
-					segment.speed.Store(0)
-					segment.lastBytes, segment.lastSample = 0, time.Now()
-					t.segmentMu.Unlock()
-					var readErr *responseReadError
-					if splitCtx.Err() != nil || !errors.As(err, &readErr) || !transientError(readErr) || attempt == attempts-1 {
-						break
-					}
-					retryBase := 250 * time.Millisecond
-					if automatic {
-						retryBase = 2 * time.Second
-					}
-					if waitErr := waitRetry(splitCtx.Done(), retryBase*time.Duration(1<<attempt)); waitErr != nil {
-						t.removeSegment(segment)
-						fail(waitErr)
-						q.finish(work, nil)
-						return
-					}
-				}
-				if err != nil {
-					t.removeSegment(segment)
-					fail(err)
-					q.finish(work, nil)
-					return
-				}
-				if written == 0 && tail != nil {
-					t.removeSegment(segment)
-					q.finish(work, tail)
-					continue
-				}
-				if checkpoints != nil {
-					segment.checkpoint.finish(c)
-					segment.checkpoint = nil
-					segment.active.Store(false)
-					nextOffset = c.end + 1
-					q.finish(work, tail)
-					continue
-				}
-				commitStarted := time.Now()
-				t.checkpointMu.Lock()
-				recorded := false
-				if m.storeDir != "" {
-					err = out.Sync()
-					if err == nil {
-						c.digest, err = chunkDigest(out, c)
-					}
-				}
-				if err == nil {
-					t.completed = append(t.completed, c)
-					recorded = true
-					err = m.saveTaskLocked(t)
-				}
-				t.checkpointMu.Unlock()
-				if err == nil {
-					observeRangeCost(&t.rangeCommitNanos, time.Since(commitStarted))
-				}
-				if err != nil {
-					if recorded {
-						segment.active.Store(false)
-					} else {
-						t.removeSegment(segment)
-						rollbackEpoch.Add(1)
-						t.done.Add(-written)
-					}
-					fail(fmt.Errorf(i18n.T("无法保存分段进度：%w"), err))
-					q.finish(work, nil)
-					return
-				}
-				segment.active.Store(false)
-				nextOffset = c.end + 1
-				q.finish(work, tail)
-			}
-		}(i)
-	}
-	wg.Wait()
-	var checkpointFailure error
-	if checkpoints != nil {
-		// Includes partial prefixes accepted on pause. Publication, fallback
-		// and output close must never race the journal writer.
-		if checkpointErr := checkpoints.close(); checkpointErr != nil {
-			checkpointFailure = fmt.Errorf(i18n.T("无法保存分段进度：%w"), checkpointErr)
-			fail(checkpointFailure)
-		}
-	}
-	stopSplit()
-	if autoDone != nil {
-		<-autoDone
-	}
-	if checkpoints != nil && firstErr != nil {
-		// A failed response may have earlier durable blocks. Reflect those
-		// blocks, rather than either losing them or counting unrecorded bytes.
-		t.checkpointMu.Lock()
-		retained := append([]chunkSpan(nil), t.completed...)
-		var done int64
-		for _, span := range retained {
-			done += span.end - span.start + 1
-		}
-		t.done.Store(done)
-		t.checkpointMu.Unlock()
-		t.resetSegments(retained)
-	}
-	if checkpointFailure != nil {
-		return checkpointFailure
-	}
-	if firstErr != nil {
-		return firstErr
-	}
-	if err := out.Close(); err != nil {
-		return err
-	}
-	select {
-	case <-t.cancel:
-		return contextCanceled
-	default:
-	}
-	return m.finishFile(t, part)
 }
 
 func resourceFingerprint(u *url.URL) string {
@@ -2777,11 +2009,59 @@ func (m *Manager) probeGitHubResume(t *Task, resolved *http.Request, total int64
 	if encoding != "" && !strings.EqualFold(encoding, "identity") {
 		return false, nil
 	}
-	body, err := io.ReadAll(io.LimitReader(idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}, 2))
+	body, err := io.ReadAll(io.LimitReader(&idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}, 2))
 	if err != nil {
 		return false, err
 	}
 	return len(body) == 1, nil
+}
+
+// probeRangeSupport 用 bytes=0-0 探测服务器是否真正支持范围请求：状态码、
+// Content-Range 核对、跨重定向资源指纹与 If-Range 强校验都要求与正式分段
+// 一致，任一不满足即放弃并保持单流。探测只发一个请求，不消耗一次性下载
+// 地址（调用方已排除）。
+func (m *Manager) probeRangeSupport(t *Task, resolved *http.Request, total int64, validator string) bool {
+	if resolved == nil || resolved.URL == nil {
+		return false
+	}
+	req, cancel, err := t.newRequest(resolved.URL.String())
+	if err != nil {
+		return false
+	}
+	defer cancel()
+	ctx, stop := context.WithTimeout(req.Context(), 2*time.Second)
+	defer stop()
+	req = req.WithContext(context.WithValue(ctx, rangeProbeKey{}, struct{}{}))
+	req.Header = resolved.Header.Clone()
+	req.Header.Set("Range", "bytes=0-0")
+	if validator != "" {
+		req.Header.Set("If-Range", validator)
+	}
+	resp, err := m.doWithRetry(t, req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || resp.Request == nil || resourceFingerprint(resp.Request.URL) != resourceFingerprint(resolved.URL) || resp.Header.Get("Content-Range") != fmt.Sprintf("bytes 0-0/%d", total) || (resp.ContentLength >= 0 && resp.ContentLength != 1) {
+		return false
+	}
+	if validator != "" {
+		header := "Last-Modified"
+		if strings.HasPrefix(validator, `"`) {
+			header = "ETag"
+		}
+		if resp.Header.Get(header) != validator {
+			return false
+		}
+	}
+	if encoding := resp.Header.Get("Content-Encoding"); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		return false
+	}
+	body, err := io.ReadAll(io.LimitReader(&idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}, 2))
+	if err != nil {
+		return false
+	}
+	return len(body) == 1
 }
 
 // downloadRangeResolved reuses only headers already allowed on the resolved
@@ -2916,7 +2196,7 @@ func (m *Manager) downloadRangeResolved(t *Task, out *os.File, start, end, total
 		// A delayed response must not be split before its integrity policy is known.
 		t.rangeBodyReady(segment, timing.elapsed(requestStarted))
 	}
-	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancelReq,
+	body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancelReq,
 		selectTimeout: func() time.Duration { return m.automaticBodyTimeout(t, segment) }}
 	var canceled <-chan struct{} = t.cancel
 	if splitCtx != nil {
@@ -2924,7 +2204,7 @@ func (m *Manager) downloadRangeResolved(t *Task, out *os.File, start, end, total
 	}
 	var writer io.Writer = &offsetWriter{f: out, off: start, segment: segment}
 	if segment != nil && segment.checkpoint != nil {
-		segment.checkpoint.protected = segment.integrityPending.Load()
+		segment.checkpoint.protected = segment.checkpoint.protected || segment.integrityPending.Load()
 		writer = rangeCheckpointWriter{writer: writer, stream: segment.checkpoint}
 	}
 	written, err := m.copyWithProgressCancel(t, writer, io.LimitReader(body, size), canceled)

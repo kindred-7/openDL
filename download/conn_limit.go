@@ -2,8 +2,11 @@ package download
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
+
+var errConnectionBusy = errors.New("no connection slot available")
 
 // connLimiter caps concurrent responses across all tasks and origins. A zero
 // limit is unlimited; changing it never interrupts an existing response.
@@ -68,6 +71,21 @@ func (l *connLimiter) contentionState() (bool, uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.waiters) > 0, l.contention
+}
+
+// tryAcquire gives speculative requests a slot only when no queued request
+// would be bypassed.
+func (l *connLimiter) tryAcquire(ctx context.Context) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.waiters) > 0 || (l.limit > 0 && l.used >= l.limit) {
+		return nil, errConnectionBusy
+	}
+	l.used++
+	return l.releaseFunc(), nil
 }
 
 // acquire serves queued requests in arrival order. Cancellation removes a

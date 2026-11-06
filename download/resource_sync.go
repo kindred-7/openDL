@@ -182,7 +182,7 @@ func (m *Manager) syncTask(t *Task, revision uint64) error {
 		if parseErr != nil || size < 1 || strconv.FormatInt(size, 10) != sizeText || (resp.ContentLength >= 0 && resp.ContentLength != 1) {
 			return i18n.NewError("周期同步范围响应无效")
 		}
-		body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
+		body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
 		if _, err = m.readExactMediaBody(t, body, 1, i18n.NewError("周期同步范围响应无效")); err != nil {
 			return fmt.Errorf(i18n.T("周期同步探测失败：%w"), err)
 		}

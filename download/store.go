@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"log"
 	"net/http"
@@ -383,6 +384,48 @@ func (m *Manager) removeTaskJournal(t *Task) {
 	if err := os.Remove(filepath.Join(m.storeDir, t.id+".json")); err != nil && !os.IsNotExist(err) {
 		log.Printf(i18n.T("删除下载记录 %s: %v"), t.id, err)
 	}
+}
+
+// segmentWriteDigest 在写入分片字节的同时计算增量摘要，落盘后直接取用，
+// 免去 chunkDigest 的磁盘回读放大。摘要只覆盖实际被写入器接受的字节。
+// 注意：fMP4 时间轴平移（shiftTfdt）会改写已写入字节，改写过的分片必须
+// 退回 chunkDigest 磁盘回读，摘要才与落盘字节一致。
+type segmentWriteDigest struct {
+	hash hash.Hash
+}
+
+func newSegmentWriteDigest() *segmentWriteDigest {
+	return &segmentWriteDigest{hash: sha256.New()}
+}
+
+// wrap 返回记录写入字节的包装写入器。
+func (d *segmentWriteDigest) wrap(w io.Writer) io.Writer {
+	return hashingWriter{w: w, digest: d}
+}
+
+// sum 返回已写入字节的十六进制摘要。
+func (d *segmentWriteDigest) sum() string {
+	return hex.EncodeToString(d.hash.Sum(nil))
+}
+
+type hashingWriter struct {
+	w      io.Writer
+	digest *segmentWriteDigest
+}
+
+func (w hashingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if n > 0 {
+		w.digest.hash.Write(p[:n])
+	}
+	return n, err
+}
+
+// digestSegmentBytes 返回驻留内存分片的十六进制摘要，与写入阶段的增量摘
+// 要同口径（覆盖实际落盘的明文字节）。
+func digestSegmentBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
 }
 
 func chunkDigest(f *os.File, c chunkSpan) (string, error) {

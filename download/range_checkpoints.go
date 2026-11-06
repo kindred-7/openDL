@@ -53,8 +53,8 @@ func newRangeCheckpoints(m *Manager, t *Task, out *os.File, fail func(error)) *r
 	return p
 }
 
-func (p *rangeCheckpoints) stream(start int64) *rangeCheckpointStream {
-	return &rangeCheckpointStream{writer: p, start: start, next: start, hash: sha256.New(), lastSeal: time.Now()}
+func (p *rangeCheckpoints) stream(start int64, protected bool) *rangeCheckpointStream {
+	return &rangeCheckpointStream{writer: p, start: start, next: start, hash: sha256.New(), lastSeal: time.Now(), protected: protected}
 }
 
 func (p *rangeCheckpoints) enqueue(event rangeCheckpointEvent) {

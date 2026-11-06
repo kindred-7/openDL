@@ -80,7 +80,7 @@ func (m *Manager) materializeDASHIndexOnce(t *Task, original, page *url.URL, tra
 		}
 	}
 	resource := resourceFingerprint(resp.Request.URL)
-	body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
+	body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
 	data, err := m.readExactMediaBody(t, body, index.Length, i18n.NewError("DASH 索引范围响应无效"))
 	if err != nil {
 		return err
@@ -236,7 +236,7 @@ func (m *Manager) expandDASHSIDX(t *Task, original, page *url.URL, refs []hlsSeg
 			cancel()
 			return nil, i18n.NewError("DASH 索引对应的资源版本发生变化")
 		}
-		body := idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
+		body := &idleReader{body: resp.Body, timeout: m.bodyIdleTimeout, cancel: cancel}
 		data, readErr := m.readExactMediaBody(t, body, ref.length, i18n.NewError("DASH 索引范围响应无效"))
 		resp.Body.Close()
 		cancel()

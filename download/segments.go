@@ -33,6 +33,8 @@ type segmentProgress struct {
 	lastSample       time.Time              // guarded by Task.segmentMu
 	lastBytes        int64                  // guarded by Task.segmentMu
 	checkpoint       *rangeCheckpointStream // owned by the range worker; never shared across attempts
+	healthyUntil     time.Time              // owned by the range worker
+	healthyOK        bool                   // owned by the range worker
 }
 
 func (t *Task) hasHealthyRange(except *segmentProgress) bool {
@@ -51,6 +53,19 @@ func (t *Task) hasHealthyRange(except *segmentProgress) bool {
 		}
 	}
 	return false
+}
+
+// hasHealthyRangeCached 以短暂 TTL 缓存 hasHealthyRange 的判定结果，避免每
+// 次 Read 都遍历分片表；缓存挂在发起询问的分片上，读取在同一 worker 内串
+// 行，几百毫秒的迟滞不影响判定语义。
+func (t *Task) hasHealthyRangeCached(except *segmentProgress) bool {
+	now := time.Now()
+	if now.Before(except.healthyUntil) {
+		return except.healthyOK
+	}
+	except.healthyOK = t.hasHealthyRange(except)
+	except.healthyUntil = now.Add(healthyRangeCacheTTL)
+	return except.healthyOK
 }
 
 func (t *Task) resetSegments(completed []chunkSpan) {

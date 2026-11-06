@@ -2,6 +2,7 @@ package download
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -59,8 +60,79 @@ func transientError(err error) bool {
 		}
 		return false
 	}
+	// 域名不存在与证书校验失败重试不会自行恢复：立即按永久失败结束，
+	// 避免无意义的退避等待。这里必须先于 net.Error 判断，握手错误常被
+	// 包进实现 net.Error 的网络错误里。
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		return false
+	}
+	var unknownAuthority x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthority) {
+		return false
+	}
+	var certificateInvalid x509.CertificateInvalidError
+	if errors.As(err, &certificateInvalid) {
+		return false
+	}
+	var hostnameMismatch x509.HostnameError
+	if errors.As(err, &hostnameMismatch) {
+		return false
+	}
 	var network net.Error
 	return errors.As(err, &network) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+// retryWithBackoff 统一瞬时读取错误的重试样板：fn 执行一次尝试，仅当错误
+// 是暂时性的 *responseReadError 时按 attempts 次上限、指数基数 base 退避重
+// 试；退避等待成功后才调用 rollback 回滚上一次尝试的写入（返回错误则放弃
+// 重试并原样上报）。cancel 关闭时立即返回 contextCanceled。
+func retryWithBackoff(cancel <-chan struct{}, attempts int, base time.Duration, rollback func() error, fn func() error) error {
+	for attempt := 0; ; attempt++ {
+		select {
+		case <-cancel:
+			return contextCanceled
+		default:
+		}
+		err := fn()
+		if err == nil {
+			return nil
+		}
+		var readErr *responseReadError
+		if !errors.As(err, &readErr) || !transientError(readErr) || attempt >= attempts-1 {
+			return err
+		}
+		if waitErr := waitRetry(cancel, base*time.Duration(1<<attempt)); waitErr != nil {
+			return waitErr
+		}
+		select {
+		case <-cancel:
+			return contextCanceled
+		default:
+		}
+		if rollback != nil {
+			if rollbackErr := rollback(); rollbackErr != nil {
+				return rollbackErr
+			}
+		}
+	}
+}
+
+// mergeCancel 合并两个取消信号：任一关闭时返回的通道随即关闭。stop 释放
+// 合并 goroutine，必须在使用方结束时调用。
+func mergeCancel(a, b <-chan struct{}) (<-chan struct{}, func()) {
+	merged := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-a:
+		case <-b:
+		case <-done:
+			return
+		}
+		close(merged)
+	}()
+	return merged, func() { close(done) }
 }
 
 func retryAfter(value string, now time.Time) time.Duration {
@@ -177,7 +249,11 @@ func (m *Manager) doWithRetry(t *Task, req *http.Request) (*http.Response, error
 		}
 		return m.waitOrigin(next.Context(), retryOrigin(next.URL))
 	}
-	for attempt := 0; attempt < maxRequestAttempts; attempt++ {
+	attempts := maxRequestAttempts
+	if req.Context().Value(rangeProbeKey{}) != nil {
+		attempts = 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		if err := m.waitOrigin(req.Context(), origin); err != nil {
 			return nil, err
 		}
@@ -225,7 +301,7 @@ func (m *Manager) doWithRetry(t *Task, req *http.Request) (*http.Response, error
 		if responseBody != nil {
 			responseBody.Close()
 		}
-		if delay > maxRetryWait || attempt == maxRequestAttempts-1 {
+		if delay > maxRetryWait || attempt == attempts-1 {
 			return nil, err
 		}
 		if err := waitRetry(req.Context().Done(), delay+retryJitter()); err != nil {

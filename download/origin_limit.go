@@ -27,6 +27,10 @@ type originGate struct {
 	users int // active holders and waiting requests, protected by mu
 }
 
+// The optional Range probe runs while the full response is still open. It
+// must never queue behind a connection slot that response is holding.
+type rangeProbeKey struct{}
+
 func (t *originTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.roundTrip(req, t.base)
 }
@@ -57,6 +61,11 @@ func (t *originTransport) refreshLimits() {
 // roundTrip shares the existing gates with an isolated authentication route.
 func (t *originTransport) roundTrip(req *http.Request, base http.RoundTripper) (*http.Response, error) {
 	origin := retryOrigin(req.URL)
+	_, probing := req.Context().Value(rangeProbeKey{}).(struct{})
+	acquire := (*connLimiter).acquire
+	if probing {
+		acquire = (*connLimiter).tryAcquire
+	}
 	t.mu.Lock()
 	if t.gates == nil {
 		t.gates = make(map[string]*originGate)
@@ -80,7 +89,7 @@ func (t *originTransport) roundTrip(req *http.Request, base http.RoundTripper) (
 		}
 		t.mu.Unlock()
 	}
-	unlockOrigin, err := gate.slots.acquire(req.Context())
+	unlockOrigin, err := acquire(gate.slots, req.Context())
 	if err != nil {
 		forget()
 		return nil, err
@@ -104,7 +113,7 @@ func (t *originTransport) roundTrip(req *http.Request, base http.RoundTripper) (
 		// one, because the deadline may have changed while we were queued.
 		if t.limiter != nil {
 			var err error
-			unlock, err = t.limiter.acquire(req.Context())
+			unlock, err = acquire(t.limiter, req.Context())
 			if err != nil {
 				release()
 				return nil, err

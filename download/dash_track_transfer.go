@@ -1,7 +1,6 @@
 package download
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -84,24 +83,93 @@ func (m *Manager) downloadDASHTrack(t *Task, out *os.File, original, base *url.U
 			return fmt.Errorf(i18n.T("DASH 续传时间轴无效：%w"), err)
 		}
 	}
-	for _, segment := range segments[count:] {
+	rest := segments[count:]
+	journal := &mediaJournal{m: m, t: t}
+	defer journal.flushLog()
+	// commitDownloaded 在分片字节落盘后执行容器校验、时间轴缝合、摘要与检查
+	// 点记账。record.SHA256 是写入阶段的增量摘要；时间轴平移改写过的分片退
+	// 回 chunkDigest 磁盘回读，摘要才与落盘字节一致。
+	commitDownloaded := func(segment hlsSegment, record *hlsCheckpoint, start, aggregate int64) error {
+		newOffset, err := out.Seek(0, io.SeekCurrent)
+		if err != nil {
+			return err
+		}
+		if newOffset <= start {
+			return i18n.NewError("DASH 轨道分片长度无效")
+		}
+		if segment.mp4 && segment.init && len(mp4.tracks) > 0 {
+			// 重复初始化段：字节一致或结构一致时跳过写入并缝合时间轴；打包时
+			// 间戳等附带差异不影响结构指纹。
+			if _, err := reuseInitialization(mp4, out, start, newOffset); err != nil {
+				return fmt.Errorf(i18n.T("无法校验 DASH 轨道分片：%w"), err)
+			}
+			mp4.pendingShift = true
+			if err := out.Truncate(start); err != nil {
+				return err
+			}
+			if err := out.Sync(); err != nil {
+				return fmt.Errorf(i18n.T("无法同步 DASH 轨道分片：%w"), err)
+			}
+			if _, err := out.Seek(start, io.SeekStart); err != nil {
+				return err
+			}
+			t.done.Store(aggregate)
+			progress.done.Store(start)
+			offset = start
+			record.End, record.SkippedInit = start, true
+			t.checkpointMu.Lock()
+			state.Completed = append(state.Completed, *record)
+			state.Splice = mp4.spliceState()
+			t.checkpointMu.Unlock()
+			if err := journal.saved(); err != nil {
+				return fmt.Errorf(i18n.T("无法保存 DASH 轨道进度：%w"), err)
+			}
+			return nil
+		}
+		if segment.mp4 && !segment.init {
+			mp4.advancePeriod(segment.period)
+			if mp4.pendingShift || mp4.shiftActive {
+				if err := mp4.shiftTfdt(out, start, newOffset); err != nil {
+					return fmt.Errorf(i18n.T("DASH MP4 分片无效：%w"), err)
+				}
+				// 平移改写了落盘字节，增量摘要作废，退回磁盘回读。
+				digest, err := chunkDigest(out, chunkSpan{start: start, end: newOffset - 1})
+				if err != nil {
+					return fmt.Errorf(i18n.T("无法校验 DASH 轨道分片：%w"), err)
+				}
+				record.SHA256 = digest
+			}
+		}
+		if segment.mp4 {
+			if err := mp4.accept(out, start, newOffset, segment.init); err != nil {
+				return fmt.Errorf(i18n.T("DASH MP4 分片无效：%w"), err)
+			}
+			if segment.init {
+				captureInitialization(mp4, out, start, newOffset)
+			}
+		}
+		if err := out.Sync(); err != nil {
+			return fmt.Errorf(i18n.T("无法同步 DASH 轨道分片：%w"), err)
+		}
+		record.End = newOffset
+		offset = newOffset
+		t.checkpointMu.Lock()
+		state.Completed = append(state.Completed, *record)
+		state.Splice = mp4.spliceState()
+		t.checkpointMu.Unlock()
+		if err := journal.saved(); err != nil {
+			return fmt.Errorf(i18n.T("无法保存 DASH 轨道进度：%w"), err)
+		}
+		return nil
+	}
+	// appendOne 串行下载并提交一个分片（预取超限时的回退路径）。
+	appendOne := func(i int) error {
+		segment := rest[i]
 		start := offset
 		aggregate := t.done.Load()
 		previous, existed := ranges[segment.url]
 		var record hlsCheckpoint
-		for attempt := 0; ; attempt++ {
-			record = hlsCheckpoint{}
-			err = m.downloadHLSSegment(t, out, progress, original, base, segment, ranges, &record)
-			if err == nil {
-				break
-			}
-			var readErr *responseReadError
-			if !errors.As(err, &readErr) || !transientError(readErr) || attempt == maxRequestAttempts-1 {
-				return err
-			}
-			if err := waitRetry(t.cancel, time.Duration(250*(1<<attempt))*time.Millisecond); err != nil {
-				return err
-			}
+		err := retryWithBackoff(t.cancel, maxRequestAttempts, 250*time.Millisecond, func() error {
 			if err := out.Truncate(start); err != nil {
 				return err
 			}
@@ -118,77 +186,41 @@ func (m *Manager) downloadDASHTrack(t *Task, out *os.File, original, base *url.U
 			} else {
 				delete(ranges, segment.url)
 			}
-		}
-		offset, err = out.Seek(0, io.SeekCurrent)
+			return nil
+		}, func() error {
+			record = hlsCheckpoint{}
+			return m.downloadHLSSegment(t, out, progress, original, base, segment, ranges, &record)
+		})
 		if err != nil {
 			return err
 		}
-		if offset <= start {
-			return i18n.NewError("DASH 轨道分片长度无效")
+		return commitDownloaded(segment, &record, start, aggregate)
+	}
+	// 点播 DASH 分片同样按有界流水线预取：并发取回、按序提交，fMP4 时间轴
+	// 缝合与检查点记账仍严格按分片顺序执行。
+	commit := func(i int, f *fetchedSegment) error {
+		segment := rest[i]
+		start := offset
+		aggregate := t.done.Load()
+		var target io.Writer = out
+		if !segment.mp4 {
+			target = &tsWriter{w: out}
 		}
-		if segment.mp4 && segment.init && len(mp4.tracks) > 0 {
-			// 重复初始化段：字节一致或结构一致时跳过写入并缝合时间轴；打包时
-			// 间戳等附带差异不影响结构指纹。
-			if _, err := reuseInitialization(mp4, out, start, offset); err != nil {
-				return fmt.Errorf(i18n.T("无法校验 DASH 轨道分片：%w"), err)
-			}
-			record.SHA256, err = chunkDigest(out, chunkSpan{start: start, end: offset - 1})
-			if err != nil {
-				return err
-			}
-			mp4.pendingShift = true
-			if err := out.Truncate(start); err != nil {
-				return err
-			}
-			if _, err := out.Seek(start, io.SeekStart); err != nil {
-				return err
-			}
-			t.done.Store(aggregate)
-			progress.done.Store(start)
-			offset = start
-			record.End, record.SkippedInit = start, true
-			t.checkpointMu.Lock()
-			state.Completed = append(state.Completed, record)
-			state.Splice = mp4.spliceState()
-			err = m.saveTaskLocked(t)
-			t.checkpointMu.Unlock()
-			if err != nil {
-				return fmt.Errorf(i18n.T("无法保存 DASH 轨道进度：%w"), err)
-			}
-			continue
-		}
-		if segment.mp4 && !segment.init {
-			mp4.advancePeriod(segment.period)
-			if mp4.pendingShift || mp4.shiftActive {
-				if err := mp4.shiftTfdt(out, start, offset); err != nil {
-					return fmt.Errorf(i18n.T("DASH MP4 分片无效：%w"), err)
-				}
-			}
-		}
-		if segment.mp4 {
-			if err := mp4.accept(out, start, offset, segment.init); err != nil {
-				return fmt.Errorf(i18n.T("DASH MP4 分片无效：%w"), err)
-			}
-			if segment.init {
-				captureInitialization(mp4, out, start, offset)
-			}
-		}
-		if err := out.Sync(); err != nil {
-			return fmt.Errorf(i18n.T("无法同步 DASH 轨道分片：%w"), err)
-		}
-		record.End = offset
-		record.SHA256, err = chunkDigest(out, chunkSpan{start: start, end: offset - 1})
+		writer := &segmentWriter{writer: target, segment: progress}
+		written, err := writeHLSPlaintext(t, writer, f.payload)
 		if err != nil {
-			return fmt.Errorf(i18n.T("无法校验 DASH 轨道分片：%w"), err)
+			return err
 		}
-		t.checkpointMu.Lock()
-		state.Completed = append(state.Completed, record)
-		state.Splice = mp4.spliceState()
-		err = m.saveTaskLocked(t)
-		t.checkpointMu.Unlock()
-		if err != nil {
-			return fmt.Errorf(i18n.T("无法保存 DASH 轨道进度：%w"), err)
+		if written != int64(len(f.payload)) {
+			return io.ErrShortWrite
 		}
+		return commitDownloaded(segment, &f.record, start, aggregate)
+	}
+	if err := m.prefetchMediaSegments(t, original, base, rest, ranges, commit, appendOne); err != nil {
+		return err
+	}
+	if err := journal.flush(); err != nil {
+		return fmt.Errorf(i18n.T("无法保存 DASH 轨道进度：%w"), err)
 	}
 	return nil
 }
