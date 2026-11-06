@@ -39,11 +39,11 @@ func waitDone(t *testing.T, m *download.Manager, id string) download.Snapshot {
 	return download.Snapshot{}
 }
 
-// The theme persists between light (default) and dark.
+// A fresh profile uses Blender Light, and explicit choices persist.
 func TestThemeToggle(t *testing.T) {
 	themeOverride = filepath.Join(t.TempDir(), "theme")
-	if loadTheme() {
-		t.Fatal("default theme must be light")
+	if mode := loadThemeMode(); mode != themeBlenderLight {
+		t.Fatalf("default theme = %q, want %q", mode, themeBlenderLight)
 	}
 	saveTheme(true)
 	if loadTheme() != true {

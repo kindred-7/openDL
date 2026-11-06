@@ -65,7 +65,11 @@ func (pg *mainPage) showNextCompletionCard() {
 	x, y := area.X+area.Width-width-inset, area.Y+area.Height-height-inset
 	var win *mygo.Window
 	view := func(c *ui.Context) {
-		p := d1AccentPalette(pg.dark, pg.preferences.AccentColor)
+		base := pg.baseTheme()
+		p := base.palette
+		if isBlenderThemeMode(pg.themeMode) {
+			c.SetTheme(base.theme)
+		}
 		card := ui.Column(c).Fill().Padding(16).Gap(12).Background(p.bg).Border(1, p.bd).Radius(style.RadiusLG).Font(style.FontFamily)
 		card.Children(func() {
 			ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {

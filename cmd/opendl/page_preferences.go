@@ -476,18 +476,26 @@ func (pg *mainPage) syncExtensionTheme() {
 		return
 	}
 	hex := func(c ui.Color) string { return fmt.Sprintf("#%02x%02x%02x", c.R, c.G, c.B) }
-	tokens := func(dark bool) api.ThemeColors {
-		c := style.NewAccentRules(dark, pg.preferences.AccentColor).Colors
+	tokens := func(base d1ThemeSet) api.ThemeColors {
+		p := base.palette
 		return api.ThemeColors{
-			Primary: hex(c.Primary), OnPrimary: hex(c.OnPrimary),
-			Selection: hex(c.Selection), Focus: hex(c.Focus), Brand: hex(c.Brand),
+			Primary: hex(p.pri), OnPrimary: hex(p.onpri),
+			Selection: hex(p.sel), Focus: hex(base.theme.Focus), Brand: hex(p.brand),
 		}
+	}
+	bases := themeBaseSet(pg.preferences.AccentColor)
+	light, dark := bases.light, bases.dark
+	switch pg.themeMode {
+	case themeBlender:
+		dark = bases.blenderDark
+	case themeBlenderLight:
+		light = bases.blenderLight
 	}
 	active := "light"
 	if pg.dark {
 		active = "dark"
 	}
-	pg.apiServer.SetTheme(api.Theme{Light: tokens(false), Dark: tokens(true), Active: active})
+	pg.apiServer.SetTheme(api.Theme{Light: tokens(light), Dark: tokens(dark), Active: active})
 }
 
 func writeAppPreferences(value appPreferences) error {
@@ -723,7 +731,8 @@ func (pg *mainPage) applyTrayPrefs() error {
 }
 
 func (pg *mainPage) selectedThemeMode() string {
-	if pg.themeMode == "light" || pg.themeMode == "dark" || pg.themeMode == "system" {
+	switch pg.themeMode {
+	case "light", "dark", "system", themeBlender, themeBlenderLight:
 		return pg.themeMode
 	}
 	if pg.dark {
@@ -741,12 +750,17 @@ func (pg *mainPage) setDarkTheme(dark bool) {
 }
 
 func (pg *mainPage) setThemeMode(mode string) {
-	if mode != "light" && mode != "dark" && mode != "system" {
+	switch mode {
+	case "light", "dark", "system", themeBlender, themeBlenderLight:
+	default:
 		return
+	}
+	if isBlenderThemeMode(pg.themeMode) != isBlenderThemeMode(mode) {
+		pg.themeStyleChanged = true
 	}
 	pg.themeMode = mode
 	applyNativeThemeMode(mode)
-	pg.dark = mode == "dark"
+	pg.dark = mode == "dark" || mode == themeBlender
 	if mode == "system" && mygo.App.IsReady() {
 		pg.dark = mygo.Theme.IsDark()
 	}
@@ -755,5 +769,18 @@ func (pg *mainPage) setThemeMode(mode string) {
 	pg.refreshSettingsWindow()
 	if pg.win != nil {
 		pg.win.Invalidate()
+	}
+	pg.invalidateThemeWindows()
+}
+
+func (pg *mainPage) invalidateThemeWindows() {
+	if pg.addWindow != nil {
+		pg.addWindow.Invalidate()
+	}
+	if pg.completionWindow != nil {
+		pg.completionWindow.Invalidate()
+	}
+	for win := range pg.browserPromptWindows {
+		win.Invalidate()
 	}
 }

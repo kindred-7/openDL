@@ -52,15 +52,20 @@ func Accent(id string) (AccentScale, bool) {
 // NewAccentRules 将强调色映射到亮暗主题的语义令牌；空值使用默认蓝色。
 func NewAccentRules(dark bool, id string) *Rules {
 	rules := NewRules(dark)
+	applyAccent(rules, id)
+	return rules
+}
+
+func applyAccent(rules *Rules, id string) {
 	if id == "" {
 		id = "blue"
 	}
 	scale, ok := Accent(id)
 	if !ok {
-		return rules
+		return
 	}
 	values := scale.Light
-	if dark {
+	if rules.Dark {
 		values = scale.Dark
 	}
 	c := &rules.Colors
@@ -78,7 +83,7 @@ func NewAccentRules(dark bool, id string) *Rules {
 		c.OnPrimary = ui.Hex("#202020")
 	default:
 		c.OnPrimary = ui.Hex("#FFFFFF")
-		if !dark && luminance(ui.Hex(values[4])) <= 1.05/4.6-0.05 {
+		if !rules.Dark && luminance(ui.Hex(values[4])) <= 1.05/4.6-0.05 {
 			c.Primary = ui.Hex(values[4])
 			c.PrimaryHover = c.Primary.Mix(ui.Hex("#000000"), 0.10)
 		} else {
@@ -87,7 +92,6 @@ func NewAccentRules(dark bool, id string) *Rules {
 		}
 		c.PrimaryPressed = c.PrimaryHover.Mix(ui.Hex("#000000"), 0.08)
 	}
-	return rules
 }
 
 func solidForWhite(color ui.Color) ui.Color {

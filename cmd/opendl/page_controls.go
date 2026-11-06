@@ -30,6 +30,21 @@ import (
 // The compact component sizes follow design.html; all states use shared tokens.
 type d1Option struct{ value, label, icon string }
 
+// d1WindowTitleBar paints the caption around MyGo's native window buttons.
+func d1WindowTitleBar(c *ui.Context, p *d1Palette, title, icon string) {
+	tb := c.TitleBar()
+	height := tb.Height
+	if height <= 0 {
+		height = style.HeightTitleBar
+	}
+	ui.Row(c).Height(height).FillWidth().Shrink(0).Padding(0, 12+tb.Right, 0, 12+tb.Left).Gap(8).AlignItems(ui.Center).
+		Background(p.card).BorderWidth(0, 0, 1, 0).BorderColor(p.bd).DragWindow().Children(func() {
+		d1Icon(c, icon, style.SizeIcon, p.fg).Shrink(0)
+		ui.Text(c, title).Grow(1).Shrink(1).Basis(0).MinWidth(0).SingleLine().
+			FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg)
+	})
+}
+
 func optionLabel(option d1Option) string {
 	if strings.HasPrefix(option.value, "cat:") {
 		return option.label
@@ -52,9 +67,9 @@ func d1Choice(c *ui.Context, p *d1Palette, label string, value *string, options 
 	if width < 1300 {
 		maxWidth = 140
 	}
-	choice.Trigger.MaxWidth(maxWidth).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(style.RadiusSM).Justify(ui.Start).
+	choice.Trigger.MaxWidth(maxWidth).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(p.controlRadius).Justify(ui.Start).
 		Border(1, p.bd).Label(tr(label)).Cursor(ui.CursorPointer)
-	hoverMotion(choice.Trigger, p.bg, p.hover)
+	hoverMotion(choice.Trigger, p.control, p.hover)
 	arrow := choice.Trigger.Animate("choice-arrow", 180*motionTarget(choice.Open()), selectMotion)
 	choice.Trigger.Children(func() {
 		if icon := map[string]string{"类型": "list-filter", "日期": "calendar"}[label]; icon != "" {
@@ -166,7 +181,7 @@ func (a *selectAlign) apply(c *ui.Context, trigger ui.Element, idx, n int, viewM
 	// 对齐行中心在滚动内容区的位置与视口高：实测优先，首帧用估值。
 	var rowContentY, vh, maxScroll, naturalY, panelH float32
 	if a.measured {
-		rowContentY = (a.rowY-a.row0Y) + a.rowH/2
+		rowContentY = (a.rowY - a.row0Y) + a.rowH/2
 		panelH, vh = a.panelH, a.panelH-2*selectAlignInset
 		maxScroll = a.scroll.MaxY
 		naturalY = a.panelY - a.usedDy
@@ -334,7 +349,7 @@ func d1Input(c *ui.Context, p *d1Palette, label, key string, value *string, pass
 	ui.Column(c).FillWidth().Shrink(1).Gap(5).Children(func() {
 		ui.Text(c, tr(label)).FontSize(style.TextSM).TextColor(p.mu)
 		c.Key(key)
-		input := ui.TextInputBase(c, value).FillWidth().Height(30).Padding(0, 10).Radius(style.RadiusSM).
+		input := ui.TextInputBase(c, value).FillWidth().Height(30).Padding(0, 10).Radius(p.controlRadius).
 			Border(1, p.bd2).Background(p.bg).TextColor(p.fg).FontSize(style.TextSM).Label(tr(label))
 		if password {
 			input.Password()
@@ -350,17 +365,16 @@ func d1Input(c *ui.Context, p *d1Palette, label, key string, value *string, pass
 func d1PrimaryButton(c *ui.Context, p *d1Palette, label, icon string, enabled ...bool) ui.Element {
 	c.Key(label)
 	ok := len(enabled) == 0 || enabled[0]
-	b := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(style.RadiusSM).Border(1, p.pri).Label(tr(label)).Cursor(ui.CursorPointer).Disabled(!ok)
-	colors := style.NewAccentRules(p.dark, p.accent).Colors
+	b := ui.ButtonBase(c).Height(style.HeightButton).Padding(0, 10).Gap(6).Radius(p.controlRadius).Border(1, p.pri).Label(tr(label)).Cursor(ui.CursorPointer).Disabled(!ok)
 	icoCol, textCol := p.onpri, p.onpri
 	if !ok {
 		b.Background(p.hover).BorderColor(p.bd)
 		icoCol, textCol = p.mu, p.mu
 	} else {
 		amount := b.Animate("primary-hover", motionTarget(b.Hovered() || b.Pressed()), controlMotion)
-		b.Background(p.pri.Mix(colors.PrimaryHover, amount))
+		b.Background(p.pri.Mix(p.priHover, amount))
 		if b.Pressed() {
-			b.Background(colors.PrimaryPressed)
+			b.Background(p.priPressed)
 		}
 	}
 	b.Children(func() {

@@ -159,6 +159,7 @@ type Colors struct {
 	Page         ui.Color // 页面底色
 	Bg           ui.Color // 窗口/卡片面
 	Panel        ui.Color // 面板：侧栏、工具栏、统计卡底
+	Control      ui.Color // 按钮与下拉触发器的静态底色
 	Fg           ui.Color // 主文字
 	Muted        ui.Color // 次要文字
 	Faint        ui.Color // 弱化文字、计数
@@ -188,23 +189,28 @@ func NewRules(dark bool) *Rules {
 
 // Rules 是一套完整的设计规则：字体 + 语义色。
 type Rules struct {
-	Font   string
-	Colors Colors
-	Dark   bool
+	Font          string
+	Colors        Colors
+	Dark          bool
+	controlRadius float32
 }
 
 // Theme 把规则映射到 MyGo 的 Theme，供内置控件取色。
 func (r *Rules) Theme() *ui.Theme {
 	c := r.Colors
+	radius := r.controlRadius
+	if radius == 0 {
+		radius = RadiusSM
+	}
 	return &ui.Theme{
 		Dark: r.Dark, Background: c.Bg,
-		Surface: c.Bg, SurfaceHover: c.Hover, SurfacePressed: c.Pressed,
+		Surface: c.Control, SurfaceHover: c.Hover, SurfacePressed: c.Pressed,
 		Border: c.Border, Text: c.Fg, TextMuted: c.Muted,
 		Accent: c.Primary, AccentHover: c.PrimaryHover, AccentPressed: c.PrimaryPressed, AccentText: c.OnPrimary,
 		Danger: c.Danger, Warning: c.Warning, Success: c.Success,
 		Selection: c.Selection, Focus: c.Focus,
 		Scrollbar: c.BorderStrong, ScrollbarWidth: 6,
-		Radius: RadiusSM, Spacing: 4, FontSize: TextBase,
+		Radius: radius, Spacing: 4, FontSize: TextBase,
 		Font: r.Font,
 	}
 }
@@ -213,7 +219,7 @@ func (r *Rules) Theme() *ui.Theme {
 // White is the light content surface; spacing and typography follow design.html.
 func lightColors() Colors {
 	colors := Colors{
-		Page: ui.Hex("#F9F9F9"), Bg: ui.Hex("#FFFFFF"), Panel: ui.Hex("#FCFCFC"),
+		Page: ui.Hex("#F9F9F9"), Bg: ui.Hex("#FFFFFF"), Panel: ui.Hex("#FCFCFC"), Control: ui.Hex("#FFFFFF"),
 		Fg: ui.Hex("#202020"), Muted: ui.Hex("#646464"), Faint: ui.Hex("#646464"),
 		Border: ui.Hex("#E8E8E8"), BorderStrong: ui.Hex("#CECECE"),
 		Primary: ui.Hex("#202020"), OnPrimary: ui.Hex("#FCFCFC"),
@@ -226,7 +232,7 @@ func lightColors() Colors {
 }
 func darkColors() Colors {
 	colors := Colors{
-		Page: ui.Hex("#111111"), Bg: ui.Hex("#191919"), Panel: ui.Hex("#111111"),
+		Page: ui.Hex("#111111"), Bg: ui.Hex("#191919"), Panel: ui.Hex("#111111"), Control: ui.Hex("#191919"),
 		Fg: ui.Hex("#EEEEEE"), Muted: ui.Hex("#B4B4B4"), Faint: ui.Hex("#B4B4B4"),
 		Border: ui.Hex("#3A3A3A"), BorderStrong: ui.Hex("#484848"),
 		Primary: ui.Hex("#EEEEEE"), OnPrimary: ui.Hex("#202020"),
@@ -236,4 +242,51 @@ func darkColors() Colors {
 	}
 	colors.Brand = colors.Primary
 	return colors
+}
+
+// NewBlenderRules adapts Blender's charcoal surfaces and muted blue controls
+// to OpenDL's existing text, status and accent semantics.
+func NewBlenderRules(accent string) *Rules {
+	rules := NewRules(true)
+	rules.controlRadius = RadiusXXS
+	c := &rules.Colors
+	c.Page, c.Bg = ui.Hex("#202020"), ui.Hex("#292929")
+	c.Panel, c.Control = ui.Hex("#333333"), ui.Hex("#414141")
+	c.Border, c.BorderStrong = ui.Hex("#1B1B1B"), ui.Hex("#626262")
+	c.Hover, c.Pressed = ui.Hex("#4D4D4D"), ui.Hex("#575757")
+	c.Selection = ui.Hex("#454545")
+	if accent == "" || accent == "blue" {
+		c.Primary, c.OnPrimary = ui.Hex("#3E67A4"), ui.Hex("#FFFFFF")
+		c.PrimaryHover, c.PrimaryPressed = ui.Hex("#466FAC"), ui.Hex("#365C95")
+		c.Brand, c.Focus = ui.Hex("#9ABCEF"), ui.Hex("#86B1EF")
+		c.Selection = ui.Hex("#354D6D")
+	} else {
+		applyAccent(rules, accent)
+	}
+	return rules
+}
+
+// NewBlenderLightRules adapts the silver panels and muted blue selection
+// of the Blender light reference to OpenDL's controls.
+func NewBlenderLightRules(accent string) *Rules {
+	rules := NewRules(false)
+	rules.controlRadius = RadiusXXS
+	c := &rules.Colors
+	c.Page, c.Bg = ui.Hex("#B9B9B9"), ui.Hex("#D6D6D6")
+	c.Panel, c.Control = ui.Hex("#C8C8C8"), ui.Hex("#DEDEDE")
+	c.Fg, c.Muted, c.Faint = ui.Hex("#202020"), ui.Hex("#424242"), ui.Hex("#484848")
+	c.Border, c.BorderStrong = ui.Hex("#969696"), ui.Hex("#696969")
+	c.Hover, c.Pressed = ui.Hex("#CDCDCD"), ui.Hex("#BCBCBC")
+	c.Selection = ui.Hex("#B8B8B8")
+	c.Success, c.Warning, c.Danger = ui.Hex("#185B3C"), ui.Hex("#754100"), ui.Hex("#9C252B")
+	if accent == "" || accent == "blue" {
+		c.Primary, c.OnPrimary = ui.Hex("#496898"), ui.Hex("#FFFFFF")
+		c.PrimaryHover, c.PrimaryPressed = ui.Hex("#5273A1"), ui.Hex("#3C5885")
+		c.Brand, c.Focus = ui.Hex("#304A70"), ui.Hex("#365881")
+		c.Selection = ui.Hex("#A8BAD5")
+	} else {
+		applyAccent(rules, accent)
+		c.Focus = c.Brand
+	}
+	return rules
 }

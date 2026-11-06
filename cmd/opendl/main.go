@@ -292,6 +292,15 @@ func categoryDirTable(dirs map[string]string) (map[string]string, string) {
 
 // ── theme persistence ────────────────────────────────────────────────────
 
+const (
+	themeBlender      = "blender" // persisted key for Blender Dark
+	themeBlenderLight = "blender-light"
+)
+
+func isBlenderThemeMode(mode string) bool {
+	return mode == themeBlender || mode == themeBlenderLight
+}
+
 var themeOverride string
 
 func themePath() string {
@@ -306,22 +315,23 @@ func themePath() string {
 }
 
 func loadTheme() bool {
-	return loadThemeMode() == "dark"
+	mode := loadThemeMode()
+	return mode == "dark" || mode == themeBlender
 }
 
 func loadThemeMode() string {
 	p := themePath()
 	if p == "" {
-		return "light"
+		return themeBlenderLight
 	}
 	b, err := os.ReadFile(p)
 	if err == nil {
 		switch mode := strings.TrimSpace(string(b)); mode {
-		case "light", "dark", "system":
+		case "light", "dark", "system", themeBlender, themeBlenderLight:
 			return mode
 		}
 	}
-	return "light"
+	return themeBlenderLight
 }
 
 func applyNativeThemeMode(mode string) {
@@ -330,7 +340,7 @@ func applyNativeThemeMode(mode string) {
 	}
 	source := mygo.ThemeLight
 	switch mode {
-	case "dark":
+	case "dark", themeBlender:
 		source = mygo.ThemeDark
 	case "system":
 		source = mygo.ThemeSystem
@@ -643,6 +653,7 @@ func main() {
 				pg.syncExtensionTheme()
 				pg.refreshSettingsWindow()
 				pg.win.Invalidate()
+				pg.invalidateThemeWindows()
 			}
 		})
 		pg.win.OnClosed(offTheme)

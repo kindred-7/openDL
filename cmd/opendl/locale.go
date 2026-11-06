@@ -22,6 +22,14 @@ func (pg *mainPage) setLanguage(locale string) {
 		s.win.SetTitle(tr("设置"))
 		s.win.Invalidate()
 	}
+	if pg.addWindow != nil {
+		pg.addWindow.SetTitle(pg.addDownloadTitle())
+		pg.addWindow.Invalidate()
+	}
+	for win, prompt := range pg.browserPromptWindows {
+		win.SetTitle(prompt.title())
+		win.Invalidate()
+	}
 	if pg.win != nil {
 		pg.win.Invalidate()
 	}

@@ -39,13 +39,13 @@ import (
 // ── 配色（design.html 的 :root / 深色变量） ──────────────────────────────
 
 type d1Palette struct {
-	dark               bool
-	accent             string
-	bg, fg, mu, mu2    ui.Color
-	bd, bd2, card, sel ui.Color
-	hover, pressed     ui.Color
-	pri, onpri, brand  ui.Color
-	ok, bad, page      ui.Color
+	bg, fg, mu, mu2         ui.Color
+	bd, bd2, card, sel      ui.Color
+	control, hover, pressed ui.Color
+	pri, onpri, brand       ui.Color
+	priHover, priPressed    ui.Color
+	ok, bad, page           ui.Color
+	controlRadius           float32
 }
 
 // d1ThemeSet 是一套基础 palette 与其 MyGo 主题；两者都不可变，供共享。
@@ -54,55 +54,71 @@ type d1ThemeSet struct {
 	theme   *ui.Theme
 }
 
-var (
-	themeBaseMu sync.Mutex
-	themeBase   = map[string][2]d1ThemeSet{}
-)
-
-// themeBaseSet 返回强调色对应的基础亮/暗配色。构建含色阶混合与白字压暗
-// 循环，代价高，按强调色缓存；调用方只读不改。
-func themeBaseSet(accent string) (light, night d1ThemeSet) {
-	themeBaseMu.Lock()
-	defer themeBaseMu.Unlock()
-	if pair, ok := themeBase[accent]; ok {
-		return pair[0], pair[1]
-	}
-	build := func(dark bool) d1ThemeSet {
-		p := buildD1Palette(dark, accent)
-		return d1ThemeSet{palette: p, theme: p.theme()}
-	}
-	light, night = build(false), build(true)
-	themeBase[accent] = [2]d1ThemeSet{light, night}
-	return light, night
+type d1ThemeBases struct {
+	light, dark, blenderDark, blenderLight d1ThemeSet
 }
 
-// buildD1Palette 把 Radix 令牌投影为模板组件配色的基础构建；
-// 只被 themeBaseSet 调用，避免缓存锁内递归。
-func buildD1Palette(dark bool, accent string) *d1Palette {
-	c := style.NewAccentRules(dark, accent).Colors
-	return &d1Palette{
-		dark: dark, accent: accent,
+func (bases d1ThemeBases) forAppearance(dark bool, mode string) d1ThemeSet {
+	switch mode {
+	case themeBlender:
+		return bases.blenderDark
+	case themeBlenderLight:
+		return bases.blenderLight
+	}
+	if dark {
+		return bases.dark
+	}
+	return bases.light
+}
+
+var (
+	themeBaseMu sync.Mutex
+	themeBase   = map[string]d1ThemeBases{}
+)
+
+// themeBaseSet 返回强调色对应的基础配色。构建含色阶混合与白字压暗
+// 循环，代价高，按强调色缓存；调用方只读不改。
+func themeBaseSet(accent string) d1ThemeBases {
+	themeBaseMu.Lock()
+	defer themeBaseMu.Unlock()
+	if bases, ok := themeBase[accent]; ok {
+		return bases
+	}
+	bases := d1ThemeBases{
+		light:        buildD1ThemeSet(style.NewAccentRules(false, accent)),
+		dark:         buildD1ThemeSet(style.NewAccentRules(true, accent)),
+		blenderDark:  buildD1ThemeSet(style.NewBlenderRules(accent)),
+		blenderLight: buildD1ThemeSet(style.NewBlenderLightRules(accent)),
+	}
+	themeBase[accent] = bases
+	return bases
+}
+
+func buildD1ThemeSet(rules *style.Rules) d1ThemeSet {
+	c, theme := rules.Colors, rules.Theme()
+	p := &d1Palette{
 		bg: c.Bg, fg: c.Fg, mu: c.Muted, mu2: c.Faint,
 		bd: c.Border, bd2: c.BorderStrong, card: c.Panel, sel: c.Selection,
-		pri: c.Primary, onpri: c.OnPrimary, brand: c.Brand, hover: c.Hover, pressed: c.Pressed,
+		control: c.Control, hover: c.Hover, pressed: c.Pressed, controlRadius: theme.Radius,
+		pri: c.Primary, onpri: c.OnPrimary, brand: c.Brand,
+		priHover: c.PrimaryHover, priPressed: c.PrimaryPressed,
 		ok: c.Success, bad: c.Danger, page: c.Page,
 	}
+	return d1ThemeSet{palette: p, theme: theme}
 }
 
 // d1Light/d1Dark 是共享 Radix 令牌到模板组件的兼容适配。
 func d1Light() *d1Palette { return d1AccentPalette(false, "") }
 
 func d1AccentPalette(dark bool, accent string) *d1Palette {
-	light, night := themeBaseSet(accent)
-	if dark {
-		return night.palette
-	}
-	return light.palette
+	return themeBaseSet(accent).forAppearance(dark, "").palette
 }
 
 func d1Dark() *d1Palette { return d1AccentPalette(true, "") }
 
-func (p *d1Palette) theme() *ui.Theme { return style.NewAccentRules(p.dark, p.accent).Theme() }
+func (pg *mainPage) baseTheme() d1ThemeSet {
+	return themeBaseSet(pg.preferences.AccentColor).forAppearance(pg.dark, pg.themeMode)
+}
 
 // themeBlend 缓存一次主题过渡的混合结果。
 type themeBlend struct {
@@ -129,15 +145,19 @@ func themePalette(dark bool, accent string, amount float32) (*d1Palette, *ui.The
 		return cached.palette, cached.theme
 	}
 	themeBlendMu.Unlock()
-	lightSet, nightSet := themeBaseSet(accent)
+	bases := themeBaseSet(accent)
+	lightSet, nightSet := bases.light, bases.dark
 	light, night := lightSet.palette, nightSet.palette
 	p := *light
-	p.dark = dark
+	if dark {
+		p.priHover, p.priPressed = night.priHover, night.priPressed
+	}
 	p.bg, p.fg = light.bg.Mix(night.bg, amount), light.fg.Mix(night.fg, amount)
 	p.mu, p.mu2 = light.mu.Mix(night.mu, amount), light.mu2.Mix(night.mu2, amount)
 	p.bd, p.bd2 = light.bd.Mix(night.bd, amount), light.bd2.Mix(night.bd2, amount)
 	p.card, p.sel = light.card.Mix(night.card, amount), light.sel.Mix(night.sel, amount)
 	p.hover, p.pressed = light.hover.Mix(night.hover, amount), light.pressed.Mix(night.pressed, amount)
+	p.control = light.control.Mix(night.control, amount)
 	p.pri, p.onpri = light.pri.Mix(night.pri, amount), light.onpri.Mix(night.onpri, amount)
 	p.brand, p.ok = light.brand.Mix(night.brand, amount), light.ok.Mix(night.ok, amount)
 	p.bad, p.page = light.bad.Mix(night.bad, amount), light.page.Mix(night.page, amount)
@@ -247,27 +267,29 @@ type mainPage struct {
 	showDirHistory                      bool
 	appMenuSection                      string
 
-	dark           bool
-	themeMode      string
-	sel            string
-	selAnchor      string // Shift 连续选择的锚点行
-	lastRowClickID string
-	lastRowClickAt time.Time
-	checked        map[string]bool
-	nav            int
-	navList        ui.Handle
-	navRows        map[string]*ui.Handle
-	sidebarBox     ui.Handle
-	tab            int // 详情页签：0 分段 1 信息 2 速度 3 请求头 4 日志
-	query          string
-	focus          string
-	status         string
-	statusArgs     []any
-	statusAt       time.Time
+	dark              bool
+	themeMode         string
+	themeStyleChanged bool
+	sel               string
+	selAnchor         string // Shift 连续选择的锚点行
+	lastRowClickID    string
+	lastRowClickAt    time.Time
+	checked           map[string]bool
+	nav               int
+	navList           ui.Handle
+	navRows           map[string]*ui.Handle
+	sidebarBox        ui.Handle
+	tab               int // 详情页签：0 分段 1 信息 2 速度 3 请求头 4 日志
+	query             string
+	focus             string
+	status            string
+	statusArgs        []any
+	statusAt          time.Time
 
 	addWasOpen                                             bool
 	browserDraft                                           *download.Request
 	browserPromptSlot                                      func()
+	browserPromptWindows                                   map[*mygo.Window]*browserDownloadWindow
 	stop                                                   chan struct{}
 	showAdd                                                bool
 	showSource                                             bool
@@ -727,8 +749,20 @@ func (pg *mainPage) view(c *ui.Context) {
 	}
 	c.Key("main-page-layout")
 	root := ui.Column(c).Fill().Font(style.FontFamily).FontSize(style.TextBase).FontWeight(style.WeightRegular).LineHeight(style.LineHeight)
-	themeAmount := root.AnimateWith("theme-crossfade", motionTarget(pg.dark), 240*time.Millisecond, ui.EaseInOut)
-	p, theme := themePalette(pg.dark, pg.preferences.AccentColor, themeAmount)
+	target := motionTarget(pg.dark)
+	if pg.themeStyleChanged {
+		root.Jump("theme-crossfade", target)
+		pg.themeStyleChanged = false
+	}
+	var p *d1Palette
+	var theme *ui.Theme
+	if isBlenderThemeMode(pg.themeMode) {
+		base := pg.baseTheme()
+		p, theme = base.palette, base.theme
+	} else {
+		amount := root.AnimateWith("theme-crossfade", target, 240*time.Millisecond, ui.EaseInOut)
+		p, theme = themePalette(pg.dark, pg.preferences.AccentColor, amount)
+	}
 	c.SetTheme(theme)
 	root.Background(p.bg)
 
@@ -776,7 +810,7 @@ func (pg *mainPage) view(c *ui.Context) {
 
 	if pg.showAdd && pg.win == nil {
 		c.Key("add-dialog")
-		pg.addDialog(c, p)
+		pg.addDialog(c, p, false)
 	}
 	if pg.showSource {
 		c.Key("source-dialog")
@@ -823,7 +857,7 @@ func (pg *mainPage) titleBar(c *ui.Context, p *d1Palette) {
 		pg.updateBadge(c, p)
 		searchFocused := false
 		searchBox := ui.Row(c).Width(360).Height(26).Padding(0, 10).Gap(8).AlignItems(ui.Center).
-			Radius(style.RadiusSM).Border(1, p.bd).Background(p.bg).Margin(0, ui.Auto)
+			Radius(p.controlRadius).Border(1, p.bd).Background(p.bg).Margin(0, ui.Auto)
 		searchBox.Children(func() {
 			d1Icon(c, "search", style.SizeIcon, p.mu)
 			c.Key("d1search")
@@ -948,9 +982,9 @@ func d1Button(c *ui.Context, p *d1Palette, label, icon string, enabled ...bool) 
 }
 
 func d1ButtonFrame(c *ui.Context, p *d1Palette, enabled bool) (ui.Element, ui.Color) {
-	button := ui.ButtonBase(c).Height(style.HeightButton).Radius(style.RadiusSM).Border(1, p.bd).
+	button := ui.ButtonBase(c).Height(style.HeightButton).Radius(p.controlRadius).Border(1, p.bd).
 		Center().Cursor(ui.CursorPointer).Disabled(!enabled)
-	hoverMotion(button, p.bg, p.hover)
+	hoverMotion(button, p.control, p.hover)
 	if !enabled {
 		return button, p.mu
 	}
@@ -2433,7 +2467,7 @@ func (pg *mainPage) statusBar(c *ui.Context, p *d1Palette, all []d1Row) {
 
 // addDialog restores the original compact header/body/footer composition.
 // Editable fields and validation remain; optional fields expand only on demand.
-func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
+func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette, standalone bool) {
 	if pg.dlgLinks != pg.dlgNameSource {
 		if pg.dlgName == "" || pg.dlgName == pg.dlgSuggestedName {
 			pg.dlgName = ""
@@ -2448,8 +2482,14 @@ func (pg *mainPage) addDialog(c *ui.Context, p *d1Palette) {
 	}
 	_, h := c.Size()
 	ui.Column(c).Fill().Background(p.bg).Children(func() {
+		title := pg.addDownloadTitle()
+		if standalone {
+			d1WindowTitleBar(c, p, title, "down")
+		}
 		ui.Column(c).Padding(16, 18, 4, 18).Children(func() {
-			ui.Text(c, map[bool]string{false: tr("添加下载"), true: tr("从站点提取下载链接")}[pg.dlgExtract]).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
+			if !standalone {
+				ui.Text(c, title).FontSize(style.TextTitle).FontWeight(style.WeightMedium).TextColor(p.fg)
+			}
 			ui.Text(c, tr("每行一个链接，支持 HTTP、HTTPS、FTP、FTPS；保存目录与连接数作用于本批任务")).FontSize(style.TextSM).TextColor(p.mu).Margin(2, 0, 0, 0)
 		})
 		ui.Scroll(c).FillWidth().Grow(1).Shrink(1).Basis(0).MaxHeight(h).Children(func() {

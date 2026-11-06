@@ -145,7 +145,7 @@ var settingsEntries = []settingsEntry{
 	{"browser-extension", "网络", "安装浏览器扩展", "选择浏览器打开扩展商店，并在浏览器中确认安装。", "浏览器 扩展 插件 商店 接管 Chrome Edge Firefox browser extension addon store"},
 	{"updates", "常规", "应用更新", "使用可信发布源检查更新，安装失败时尝试恢复程序文件。", "更新 版本 发布 签名 自动 update version release signature"},
 	{"language", "常规", "语言", "选择应用显示语言，立即生效。", "语言 language English 中文"},
-	{"appearance", "界面", "外观", "选择主题或跟随系统。", "主题 深色 浅色 跟随系统 颜色"},
+	{"appearance", "界面", "外观", "选择主题或跟随系统。", "主题 深色 浅色 跟随系统 颜色 Blender 浅色 Blender 深色"},
 	{"accent", "界面", "主题色", "选择全局强调色，适配亮色和深色主题。", "颜色 主题色 色盘 强调色 radix color accent"},
 	{"clipboard", "下载", "剪贴板监听", "检测到剪贴板链接时打开添加下载对话框确认。", "剪贴板 监听 链接"},
 	{"drag-file-action", "下载", "拖出文件时", "将已完成的文件拖到窗口外时使用的操作。移动后原路径可能失效。", "拖拽 拖放 文件 复制 移动"},
@@ -413,7 +413,7 @@ func (pg *mainPage) openSettings() {
 	s.win = mygo.NewWindow(mygo.WindowOptions{
 		Title: tr("设置"), Width: 840, Height: 620, MinWidth: 680, MinHeight: 500,
 		Parent: pg.win, StateKey: "settings", Content: ui.View(s.view),
-		TitleBarStyle: mygo.TitleBarHidden, TitleBarHeight: 38,
+		TitleBarStyle: mygo.TitleBarHidden, TitleBarHeight: int(style.HeightTitleBar),
 	})
 	s.win.OnClosed(func() {
 		s.loginPassword = ""
@@ -949,8 +949,9 @@ func (s *settingsPage) applyCustomCategories() {
 }
 
 func (s *settingsPage) view(c *ui.Context) {
-	p := d1AccentPalette(s.owner.dark, s.owner.preferences.AccentColor)
-	c.SetTheme(p.theme())
+	base := s.owner.baseTheme()
+	p := base.palette
+	c.SetTheme(base.theme)
 	query := strings.ToLower(strings.TrimSpace(s.query))
 	if query != s.previousQuery {
 		s.searchSection = ""
@@ -978,7 +979,7 @@ func (s *settingsPage) view(c *ui.Context) {
 	s.sidebarWidth = clampPanel(preferredWidth, settingsSidebarMin, upper)
 	ui.Column(c).Fill().Font(style.FontFamily).FontSize(style.TextBase).FontWeight(style.WeightRegular).
 		LineHeight(style.LineHeight).Background(p.bg).Children(func() {
-		s.titleBar(c, p)
+		d1WindowTitleBar(c, p, tr("设置"), "cog")
 		panelSplit(c, p, "settings-sidebar-split", &s.sidebarWidth, settingsSidebarMin, upper, func() {
 			ui.Column(c).Fill().Padding(16, 12).Gap(14).Background(p.card).Children(func() {
 				settingsSearchFocused := false
@@ -1097,24 +1098,6 @@ func (s *settingsPage) view(c *ui.Context) {
 	})
 }
 
-func (s *settingsPage) titleBar(c *ui.Context, p *d1Palette) {
-	tb := c.TitleBar()
-	height := tb.Height
-	if height <= 0 {
-		height = style.HeightTitleBar
-	}
-	ui.Row(c).Height(height).FillWidth().PaddingStart(12).Gap(8).AlignItems(ui.Center).
-		Background(p.card).BorderWidth(0, 0, 1, 0).BorderColor(p.bd).DragWindow().Children(func() {
-		if tb.Left > 0 {
-			ui.Box(c).Width(tb.Left).Height(height)
-		}
-		d1Icon(c, "cog", 16, p.fg)
-		ui.Text(c, tr("设置")).FontSize(style.TextBase).FontWeight(style.WeightMedium).TextColor(p.fg)
-		ui.Box(c).Grow(1).Shrink(1).Basis(0)
-		ui.Box(c).Width(tb.Right).Height(height)
-	})
-}
-
 // settingGroup 渲染一组设置卡片：组标题在卡片外，卡片内每项一行。
 func (s *settingsPage) settingGroup(c *ui.Context, p *d1Palette, group settingsGroup, singleEntry bool) {
 	advanced := false
@@ -1200,8 +1183,6 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 					}
 				})
 				switch entry.id {
-				case "appearance":
-					s.themeChoices(c, p)
 				case "accent":
 					s.accentChoices(c, p)
 				case "speed":
@@ -1319,9 +1300,7 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 		case "shortcuts":
 			s.shortcutFields(c, p)
 		case "appearance":
-			if hideTitle {
-				s.themeChoices(c, p)
-			}
+			s.themeChoices(c, p)
 		case "accent":
 			if hideTitle {
 				s.accentChoices(c, p)
@@ -1714,15 +1693,19 @@ func (s *settingsPage) accentChoices(c *ui.Context, p *d1Palette) {
 	c.Key("accent-picker")
 	choice := ui.SelectBase(c, &s.owner.preferences.AccentColor)
 	trigger := choice.Trigger.Width(settingsControlWidth).Height(style.HeightButton).Shrink(0).
-		Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd).
-		Background(p.bg).Label(tr("主题色")).Cursor(ui.CursorPointer)
-	hoverMotion(trigger, p.bg, p.hover)
+		Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(p.controlRadius).Border(1, p.bd).
+		Label(tr("主题色")).Cursor(ui.CursorPointer)
+	hoverMotion(trigger, p.control, p.hover)
 	trigger.Children(func() {
 		ui.Box(c).Size(16, 16).Radius(style.RadiusSM).Background(p.pri).Border(1, p.bd)
 		ui.Text(c, tr(label)).Grow(1).Shrink(1).Basis(0).MinWidth(0).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
 		d1Icon(c, "chev", 16, p.mu).Shrink(0)
 	})
-	trigger.OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
+	trigger.OnChange(func() {
+		s.owner.saveAppPreferences()
+		s.owner.invalidateThemeWindows()
+		s.changed()
+	})
 	choice.Popup(func(panel ui.Element) {
 		al := selectAlignState(panel)
 		dy := al.apply(c, trigger, selIdx, len(options), 248)
@@ -1730,14 +1713,14 @@ func (s *settingsPage) accentChoices(c *ui.Context, p *d1Palette) {
 			ui.Scroll(c).MaxHeight(248).FillWidth().TrackScroll(&al.scroll).Children(func() {
 				for i, option := range options {
 					c.Key(option.id)
-					colors := style.NewAccentRules(p.dark, option.id).Colors
+					preview := themeBaseSet(option.id).forAppearance(s.owner.dark, s.owner.themeMode).palette
 					item := choice.Item(option.id).FillWidth().Padding(6, 8).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Label(tr(option.label)).Cursor(ui.CursorPointer)
 					al.measure(i, selIdx, item, panel)
 					if item.Highlighted() {
 						item.Background(p.hover)
 					}
 					item.Children(func() {
-						ui.Box(c).Size(16, 16).Radius(style.RadiusSM).Background(colors.Primary).Border(1, p.bd).Shrink(0)
+						ui.Box(c).Size(16, 16).Radius(p.controlRadius).Background(preview.pri).Border(1, p.bd).Shrink(0)
 						ui.Text(c, tr(option.label)).Grow(1).Shrink(1).Basis(0).MinWidth(0).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
 						if accent == option.id {
 							style.Icon(c, style.IconCheck, 16, p.fg)
@@ -1752,14 +1735,22 @@ func (s *settingsPage) accentChoices(c *ui.Context, p *d1Palette) {
 // Theme previews use the same palettes as the real windows, so choices
 // remain recognisable regardless of the currently active theme.
 func (s *settingsPage) themeChoices(c *ui.Context, p *d1Palette) {
+	accent := s.owner.preferences.AccentColor
+	bases := themeBaseSet(accent)
 	ui.RadioGroup(c, func() {
 		for _, option := range []struct {
 			value, label string
 			palette      *d1Palette
-		}{{"system", "跟随系统", nil}, {"light", "浅色", d1AccentPalette(false, s.owner.preferences.AccentColor)}, {"dark", "深色", d1AccentPalette(true, s.owner.preferences.AccentColor)}} {
+		}{
+			{"system", "跟随系统", nil},
+			{"light", "浅色", bases.light.palette},
+			{"dark", "深色", bases.dark.palette},
+			{themeBlenderLight, "Blender 浅色", bases.blenderLight.palette},
+			{themeBlender, "Blender 深色", bases.blenderDark.palette},
+		} {
 			c.Key("theme-" + option.value)
 			selected := s.theme == option.value
-			b := ui.RadioBase(c, &s.theme, option.value).Column().Size(88, 57).Padding(4).
+			b := ui.RadioBase(c, &s.theme, option.value).Column().Width(88).Shrink(0).Padding(4).Gap(3).
 				AlignItems(ui.Center).Radius(style.RadiusMD).Border(2, p.bd).Label(tr(option.label)).Cursor(ui.CursorPointer)
 			b.Tooltip(tr(option.label))
 			selectedAmount := b.Animate("theme-selection", motionTarget(selected || b.FocusVisible()), selectMotion)
@@ -1767,14 +1758,15 @@ func (s *settingsPage) themeChoices(c *ui.Context, p *d1Palette) {
 			hoverMotion(b, ui.Transparent, p.hover)
 			b.Children(func() {
 				if option.value == "system" {
-					systemThemePreview(c, s.owner.preferences.AccentColor)
+					systemThemePreview(c, accent)
 				} else {
 					themePreview(c, option.palette)
 				}
+				ui.Text(c, tr(option.label)).FontSize(style.TextXS).TextColor(p.fg).SingleLine()
 			})
 			b.OnChange(func() { s.owner.setThemeMode(s.theme); s.changed() })
 		}
-	}).Row().Gap(8).Shrink(0).Label(tr("主题"))
+	}).Row().FillWidth().Wrap().Gap(8).Shrink(0).Label(tr("主题"))
 }
 
 func systemThemePreview(c *ui.Context, accent string) {
@@ -1931,7 +1923,7 @@ func (s *settingsPage) shortcutFields(c *ui.Context, p *d1Palette) {
 
 func settingsInput(c *ui.Context, p *d1Palette, label, key string, value *string, hint string) ui.Element {
 	c.Key(key)
-	input := ui.TextInputBase(c, value).Height(settingsInputHeight).Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd2).
+	input := ui.TextInputBase(c, value).Height(settingsInputHeight).Padding(0, 10).Radius(p.controlRadius).Border(1, p.bd2).
 		Background(p.bg).TextColor(p.fg).FontSize(style.TextSM).Label(tr(label)).Tooltip(*value)
 	if hint != "" {
 		input.Placeholder(tr(hint))
