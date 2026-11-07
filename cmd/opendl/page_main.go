@@ -353,8 +353,6 @@ type mainPage struct {
 	schedulePaused                                           []string
 
 	limitOn     bool
-	clipOn      bool
-	clipLast    string
 	fileMissing map[string]bool // 已完成任务的本地文件被清理；仅在界面线程读写
 	quotaWarned bool            // 流量配额提示去重；与 histMu 同步读写
 
@@ -484,13 +482,12 @@ func (pg *mainPage) initState() {
 		pg.typeFilters = map[string]bool{}
 		pg.panes.defaults()
 		if !pg.preferencesLoaded {
-			pg.preferences = appPreferences{Directory: pg.saveDir, Connections: 8, Clipboard: true, NightOn: false, NightAt: "01:00"}
+			pg.preferences = appPreferences{Directory: pg.saveDir, Connections: 8, NightOn: false, NightAt: "01:00"}
 		}
 		pg.nightAt = pg.preferences.NightAt
 		pg.nightOn = pg.preferences.NightOn
 		pg.nightStop = pg.preferences.NightStop
 		pg.nightDays = pg.preferences.NightDays
-		pg.clipOn = pg.preferences.Clipboard
 		pg.sortDesc = pg.preferences.SortDesc
 		pg.dlgSeg = connectionIndex(pg.preferences.Connections)
 		pg.dlgNow = true
@@ -558,7 +555,6 @@ func (pg *mainPage) startWindow() {
 		pg.fileIconRequests = make(chan fileIconRequest, 32)
 		go pg.fileIconWatch()
 	}
-	go pg.clipboardWatch()
 	go pg.fileStateWatch()
 	go pg.trayStatusWatch()
 	go pg.nightWatch()
@@ -2335,7 +2331,6 @@ func (pg *mainPage) logTab(c *ui.Context, p *d1Palette, r d1Row) {
 			if copyLog.Clicked() {
 				text := strings.Join(lines, "\n")
 				if pg.svc != nil {
-					pg.clipLast = text
 					pg.svc.WriteClipboard(text)
 					pg.markCopied(copyKey)
 				}
@@ -3285,56 +3280,17 @@ func (pg *mainPage) statusText() string {
 	return i18n.F(pg.status, pg.statusArgs...)
 }
 
-// ── 后台监听：剪贴板与夜间队列 ──────────────────────────────────────────
-
-// Clipboard reads and writes are performed on the window update thread.
-// Remember our own write so clipboard monitoring does not create a duplicate.
 func (pg *mainPage) copyDownloadURL(address string) {
 	pg.copyRowText(address)
 }
 
-// copyRowText 把文本写入剪贴板并短暂提示；记住自身写入避免监听重复触发。
+// copyRowText 把文本写入剪贴板并短暂提示。
 func (pg *mainPage) copyRowText(text string) {
 	if pg.svc == nil || text == "" {
 		return
 	}
-	pg.clipLast = text
 	pg.svc.WriteClipboard(text)
 	pg.markCopied("url")
-}
-
-func (pg *mainPage) clipboardWatch() {
-	t := time.NewTicker(2 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-pg.stop:
-			return
-		case <-t.C:
-		}
-		mygo.RunOnMain(func() {
-			if !pg.clipOn || pg.svc == nil {
-				return
-			}
-			txt := pg.svc.ReadClipboard()
-			if txt == "" || txt == pg.clipLast {
-				return
-			}
-			pg.clipLast = txt
-			links := d1ParseLinks(txt)
-			if len(links) == 0 || !clipboardIsLinks(txt, links) {
-				return
-			}
-			// 克制：进入添加下载对话框由用户确认，不自动开下；对话框打开时
-			// 不覆盖正在填写的内容，同一份剪贴板内容只提示一次。
-			if pg.showAdd {
-				return
-			}
-			pg.dlgLinks = strings.Join(links, "\n")
-			pg.openAdd(false)
-			pg.win.Invalidate()
-		})
-	}
 }
 
 // recentDirs 给出最近使用的保存目录：默认目录在前，其后按任务由新到旧去重，
@@ -3420,27 +3376,6 @@ func (pg *mainPage) fileStateWatch() {
 		case <-t.C:
 		}
 	}
-}
-
-// clipboardIsLinks 仅当剪贴板的非空行都是已解析的链接时返回 true：正文夹带
-// 链接的复制不应触发下载提示，行数上限避免整份链接清单刷屏。
-func clipboardIsLinks(text string, links []string) bool {
-	set := make(map[string]bool, len(links))
-	for _, link := range links {
-		set[link] = true
-	}
-	lines := 0
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		lines++
-		if lines > 20 || !set[line] {
-			return false
-		}
-	}
-	return lines > 0
 }
 
 // runNightStop 到达停止时间时暂停运行中的任务并记住它们；下次开始时间

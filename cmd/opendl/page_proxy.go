@@ -84,7 +84,7 @@ func (s *settingsPage) proxyFields(c *ui.Context, p *d1Palette) {
 					ui.Text(c, tr("密码")).FontSize(style.TextSM).TextColor(p.fg)
 					c.Key("settings-proxy-password")
 					// Password fields must never reuse settingsInput's value tooltip.
-					input := ui.TextInputBase(c, &s.proxyPassword).Password().FillWidth().Height(32).
+					input := ui.TextInputBase(c, &s.proxyPassword).Password().FillWidth().Height(style.HeightButton).
 						Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd2).Background(p.bg).
 						TextColor(p.fg).FontSize(style.TextSM).Label(tr("代理密码"))
 					if input.Focused() {

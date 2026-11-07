@@ -43,7 +43,7 @@ func (s *settingsPage) siteLoginsFields(c *ui.Context, p *d1Palette) {
 				ui.Text(c, tr("密码")).FontSize(style.TextSM).TextColor(p.fg)
 				c.Key("settings-login-password")
 				// 密码输入不复用 settingsInput 的取值提示。
-				input := ui.TextInputBase(c, &s.loginPassword).Password().FillWidth().Height(32).
+				input := ui.TextInputBase(c, &s.loginPassword).Password().FillWidth().Height(style.HeightButton).
 					Padding(0, 10).Radius(style.RadiusSM).Border(1, p.bd2).Background(p.bg).
 					TextColor(p.fg).FontSize(style.TextSM).Label(tr("站点密码"))
 				if input.Focused() {

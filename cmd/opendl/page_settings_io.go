@@ -81,7 +81,6 @@ func (pg *mainPage) importSettings() {
 	pg.proxyJob++
 	pg.preferences = prefs
 	pg.saveDir = prefs.Directory
-	pg.clipOn = prefs.Clipboard
 	pg.sortDesc = prefs.SortDesc
 	pg.nightOn, pg.nightAt, pg.nightStop = prefs.NightOn, prefs.NightAt, prefs.NightStop
 	pg.nightDays = append([]int(nil), prefs.NightDays...)

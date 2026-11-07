@@ -90,7 +90,6 @@ const (
 	settingsSidebarMax     float32 = 360
 	settingsContentMin     float32 = 440
 	settingsControlWidth   float32 = 140
-	settingsInputHeight    float32 = 32
 )
 
 type settingsEntry struct{ id, section, title, description, keywords string }
@@ -147,7 +146,6 @@ var settingsEntries = []settingsEntry{
 	{"language", "常规", "语言", "选择应用显示语言，立即生效。", "语言 language English 中文"},
 	{"appearance", "界面", "外观", "选择主题或跟随系统。", "主题 深色 浅色 跟随系统 颜色 Blender 浅色 Blender 深色"},
 	{"accent", "界面", "主题色", "选择全局强调色，适配亮色和深色主题。", "颜色 主题色 色盘 强调色 radix color accent"},
-	{"clipboard", "下载", "剪贴板监听", "检测到剪贴板链接时打开添加下载对话框确认。", "剪贴板 监听 链接"},
 	{"drag-file-action", "下载", "拖出文件时", "将已完成的文件拖到窗口外时使用的操作。移动后原路径可能失效。", "拖拽 拖放 文件 复制 移动"},
 	{"file-exists", "下载", "文件已存在时", "下载目录已有同名文件时，覆盖原文件或创建副本。", "重名 覆盖 副本 已存在 同名 duplicate overwrite"},
 	{"notify-system", "常规", "系统通知", "任务下载完成时显示系统通知。", "通知 提醒 系统 完成 声音 notify system"},
@@ -203,7 +201,7 @@ var settingsGroups = []settingsGroup{
 	{"面板", "界面", []string{"detail", "reset-layout"}},
 	{"键盘快捷键", "界面", []string{"shortcuts"}},
 
-	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "file-exists", "task-concurrency", "connections", "max-connections", "unverified-resume"}},
+	{"下载", "下载", []string{"directory", "drag-file-action", "file-exists", "task-concurrency", "connections", "max-connections", "unverified-resume"}},
 	{"速度与流量", "下载", []string{"speed", "traffic-quota"}},
 	{"媒体合并程序", "下载", []string{"media-mux"}},
 	{"分类保存目录", "下载", []string{"category-dirs"}},
@@ -983,7 +981,7 @@ func (s *settingsPage) view(c *ui.Context) {
 		panelSplit(c, p, "settings-sidebar-split", &s.sidebarWidth, settingsSidebarMin, upper, func() {
 			ui.Column(c).Fill().Padding(16, 12).Gap(14).Background(p.card).Children(func() {
 				settingsSearchFocused := false
-				settingsSearchBox := ui.Row(c).Height(32).Padding(0, 8).Gap(7).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd2).Background(p.bg)
+				settingsSearchBox := ui.Row(c).Height(style.HeightButton).Padding(0, 8).Gap(7).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd2).Background(p.bg)
 				settingsSearchBox.Children(func() {
 					d1Icon(c, "search", 16, p.mu)
 					c.Key("settings-search")
@@ -1186,7 +1184,7 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "accent":
 					s.accentChoices(c, p)
 				case "speed":
-					field := ui.Row(c).Width(settingsControlWidth).Height(32).Shrink(0).Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd2).Background(p.bg)
+					field := ui.Row(c).Width(settingsControlWidth).Height(style.HeightButton).Shrink(0).Padding(0, 10).Gap(8).AlignItems(ui.Center).Radius(style.RadiusSM).Border(1, p.bd2).Background(p.bg)
 					field.Children(func() {
 						c.Key("settings-rate")
 						input := ui.TextInputBase(c, &s.rate).Grow(1).Shrink(1).Basis(0).MinWidth(0).TextColor(p.fg).FontSize(style.TextSM).Label(tr("下载速度限制（MB/s）"))
@@ -1206,8 +1204,6 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "proxy":
 					d1Choice(c, p, "代理模式", &s.proxyMode, []d1Option{{value: "environment", label: "环境代理"}, {value: "system", label: "系统代理"}, {value: "direct", label: "不使用代理"}, {value: "manual", label: "手动代理"}}).
 						Width(settingsControlWidth).Shrink(0).Tooltip(tr("代理设置用于后续网络请求，已传输的响应继续使用原连接")).OnChange(s.proxyEdited)
-				case "clipboard":
-					settingsSwitch(c, p, "剪贴板监听", &s.owner.clipOn).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "unverified-resume":
 					settingsSwitch(c, p, "允许未校验续传", &s.owner.preferences.AllowUnverifiedResume).OnChange(func() {
 						s.owner.mgr.SetAllowUnverifiedResume(s.owner.preferences.AllowUnverifiedResume)
@@ -1923,7 +1919,7 @@ func (s *settingsPage) shortcutFields(c *ui.Context, p *d1Palette) {
 
 func settingsInput(c *ui.Context, p *d1Palette, label, key string, value *string, hint string) ui.Element {
 	c.Key(key)
-	input := ui.TextInputBase(c, value).Height(settingsInputHeight).Padding(0, 10).Radius(p.controlRadius).Border(1, p.bd2).
+	input := ui.TextInputBase(c, value).Height(style.HeightButton).Padding(0, 10).Radius(p.controlRadius).Border(1, p.bd2).
 		Background(p.bg).TextColor(p.fg).FontSize(style.TextSM).Label(tr(label)).Tooltip(*value)
 	if hint != "" {
 		input.Placeholder(tr(hint))
