@@ -25,7 +25,7 @@ func (s *settingsPage) browserExtensionFields(c *ui.Context, p *d1Palette) {
 			label := fmt.Sprintf(tr("在 %s 中打开扩展商店"), option.browser)
 			c.Key(string(option.browser))
 			button, color := d1ButtonFrame(c, p, !s.browserExtensionOpening)
-			button.Shrink(0).Height(settingsInputHeight).Padding(0, 10).Label(label).Tooltip(label).
+			button.Shrink(0).Padding(0, 10).Label(label).Tooltip(label).
 				Children(func() {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
 						ui.Row(c).Gap(style.GapXS).AlignItems(ui.Center).Children(func() {
