@@ -51,6 +51,7 @@ type message struct {
 	Cookie          string            `json:"cookie,omitempty"`
 	Headers         map[string]string `json:"headers,omitempty"`
 	ExpectedBytes   int64             `json:"expectedBytes,omitempty"`
+	FileSize        *int64            `json:"fileSize,omitempty"`
 	MediaMode       string            `json:"mediaMode,omitempty"`
 	MediaQuality    string            `json:"mediaQuality,omitempty"`
 	AudioLanguage   string            `json:"audioLanguage,omitempty"`
@@ -181,7 +182,7 @@ func handleMessage(client *http.Client, base, token string, msg message, hostVer
 func handle(client *http.Client, base, token string, msg message, hostVersion string) map[string]any {
 	switch msg.Type {
 	case "ping":
-		return map[string]any{"ok": true, "app": "opendl-host", "version": hostVersion, "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}, "siteRules": loadSiteRules()}
+		return map[string]any{"ok": true, "app": "opendl-host", "version": hostVersion, "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay", "file-size-probe"}, "siteRules": loadSiteRules()}
 	case "desktopStatus":
 		info, err := desktopCapabilities(client, base, token, nil)
 		if err != nil {
@@ -247,13 +248,16 @@ func handle(client *http.Client, base, token string, msg message, hostVersion st
 			tasks = make([]map[string]any, 0)
 		}
 		return map[string]any{"ok": true, "tasks": tasks, "next": page.Next}
-	case "download", "prompt":
+	case "download", "prompt", "probe":
 		if msg.Queue != "" && msg.Queue != "main" && msg.Queue != "night" {
 			return map[string]any{"ok": false, "reason": i18n.T("不支持的下载队列")}
 		}
 		var required []string
 		if msg.Type == "prompt" {
 			required = append(required, "download-prompt")
+		}
+		if msg.Type == "probe" {
+			required = append(required, "file-size-probe")
 		}
 		if msg.Queue == "night" {
 			required = append(required, "scheduled-queue")
@@ -330,10 +334,15 @@ func handle(client *http.Client, base, token string, msg message, hostVersion st
 		if msg.ExpectedBytes > 0 {
 			payload["expectedBytes"] = msg.ExpectedBytes
 		}
+		if msg.Type == "prompt" && msg.FileSize != nil && *msg.FileSize >= 0 {
+			payload["fileSize"] = *msg.FileSize
+		}
 		body, _ := json.Marshal(payload)
 		endpoint := "/api/download"
 		if msg.Type == "prompt" {
 			endpoint = "/api/prompt"
+		} else if msg.Type == "probe" {
+			endpoint = "/api/probe"
 		}
 		req, err := http.NewRequest(http.MethodPost, base+endpoint, bytes.NewReader(body))
 		if err != nil {
@@ -387,7 +396,7 @@ func handle(client *http.Client, base, token string, msg message, hostVersion st
 		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil || out == nil {
 			return map[string]any{"ok": false, "deliveryUnknown": true, "reason": i18n.T("桌面端响应格式无效")}
 		}
-		if id, ok := out["id"].(string); !ok || id == "" {
+		if id, ok := out["id"].(string); msg.Type != "probe" && (!ok || id == "") {
 			return map[string]any{"ok": false, "deliveryUnknown": true, "reason": i18n.T("桌面端未返回任务编号")}
 		}
 		out["ok"] = true

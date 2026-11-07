@@ -6,7 +6,7 @@
 // is unavailable and the background entry loads these files first instead.
 if (typeof importScripts === "function") importScripts("resources.js", "i18n.js");
 const localize = globalThis.openDLI18n.t;
-const { downloadable: DOWNLOAD_EXT, playlistMime, directMediaMime, isCoremailAttachmentDownload } = globalThis.openDLResourceTypes;
+const { downloadable: DOWNLOAD_EXT, playlistMime, directMediaMime, asFileSize, normalizeDownloadURL, isCoremailAttachmentDownload } = globalThis.openDLResourceTypes;
 const HOST_NAME = "com.example.opendl";
 let port = null;
 let ready = false;
@@ -43,7 +43,11 @@ chrome.runtime.onInstalled.addListener(() => { void ensureContextMenu(); });
 void ensureContextMenu();
 chrome.contextMenus.onClicked.addListener((info, tab) => {
   if (info.menuItemId !== "opendl-download-link") return;
-  const url = info.linkUrl || info.srcUrl || "";
+  const url = normalizeDownloadURL(info.linkUrl || info.srcUrl || "");
+  if (!url) {
+    void captureNotice(localize("没有可下载的资源"));
+    return;
+  }
   if (!/^https?:/i.test(url)) {
     void captureNotice(localize("仅支持 HTTP 和 HTTPS 链接"));
     return;
@@ -187,7 +191,7 @@ function rememberDownloadContext(details) {
     else downloadContexts.delete(url);
   }
   const entries = (downloadContexts.get(details.url) || []).filter((entry) => entry.tabId !== details.tabId);
-  entries.push({ tabId: details.tabId, at: now });
+  entries.push({ tabId: details.tabId, at: now, method: details.method });
   downloadContexts.delete(details.url);
   downloadContexts.set(details.url, entries.slice(-16));
   if (downloadContexts.size > 256) downloadContexts.delete(downloadContexts.keys().next().value);
@@ -349,7 +353,80 @@ async function forgetDocument(tabId, url) {
     await chrome.storage.session.set({ [key]: entries.filter((item) => item.hash !== hash) });
   });
 }
-// Use only response metadata and configured formats; no speculative network replay.
+// Read complete representation sizes from response headers.
+function responseFileSize(details) {
+  const header = (name) => details.responseHeaders?.find((h) => h.name.toLowerCase() === name)?.value?.trim() || "";
+  const encoding = header("content-encoding").toLowerCase();
+  if (encoding && encoding !== "identity") return undefined;
+  if (details.statusCode === 416 && header("content-range").toLowerCase() === "bytes */0") return 0;
+  if (details.statusCode === 206) {
+    const range = /^bytes\s+(\d+)-(\d+)\/(\d+)$/i.exec(header("content-range"));
+    if (!range) return undefined;
+    const [, first, last, length] = range;
+    const total = asFileSize(Number(length));
+    return total !== undefined && Number(first) <= Number(last) && Number(last) < total ? total : undefined;
+  }
+  const length = header("content-length");
+  return details.statusCode === 200 && /^\d+$/.test(length) ? asFileSize(Number(length)) : undefined;
+}
+
+const fileSizeLookups = new Map();
+
+async function probePublicFileSize(url) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    for (const method of ["HEAD", "GET"]) {
+      const response = await fetch(url, {
+        method, credentials: "omit", signal: controller.signal,
+        headers: method === "GET" ? { Range: "bytes=0-0" } : {}
+      });
+      const mime = (response.headers.get("content-type") || "").split(";", 1)[0].trim().toLowerCase();
+      const size = mime === "text/html" || mime === "application/xhtml+xml" ? undefined : responseFileSize({
+        statusCode: response.status,
+        responseHeaders: [...response.headers].map(([name, value]) => ({ name, value }))
+      });
+      if (response.body) await response.body.cancel();
+      if (size !== undefined) return size;
+      if (![200, 403, 405, 501].includes(response.status)) return undefined;
+    }
+  } catch {} finally {
+    clearTimeout(timer);
+    controller.abort();
+  }
+  return undefined;
+}
+
+async function probeResourceFileSize(msg) {
+  const url = normalizeDownloadURL(msg.url);
+  if (!url || url.length > 4096 || !/^https?:\/\//i.test(url)) return undefined;
+  const key = JSON.stringify([msg.tabId, msg.pageUrl, url, msg.useBrowserCookies === true]);
+  const cached = fileSizeLookups.get(key);
+  if (cached && cached.expires > Date.now()) return cached.result;
+  const entry = { tabId: msg.tabId, expires: Date.now() + 30000, result: null };
+  entry.result = (async () => {
+    try {
+      if (await connect() && mediaCapabilities.has("file-size-probe")) {
+        const activePort = port;
+        const cookie = msg.useBrowserCookies ? await browserCookies({ ...msg, url }) : "";
+        const reply = await sendNative(activePort, { type: "probe", url, pageUrl: msg.pageUrl || "", cookie }, false, 12000);
+        if (reply?.ok) {
+          const size = asFileSize(reply.fileSize);
+          entry.expires = Date.now() + (size === undefined ? 30000 : 180000);
+          return size;
+        }
+        if (reply?.code !== "desktop_unsupported") return undefined;
+      }
+      const size = await probePublicFileSize(url);
+      entry.expires = Date.now() + (size === undefined ? 30000 : 180000);
+      return size;
+    } catch { return undefined; }
+  })();
+  fileSizeLookups.set(key, entry);
+  if (fileSizeLookups.size > 256) fileSizeLookups.delete(fileSizeLookups.keys().next().value);
+  return entry.result;
+}
+
 function responseFilename(headers) {
   const disposition = headers?.find((h) => h.name.toLowerCase() === "content-disposition")?.value || "";
   const extended = disposition.match(/(?:^|;)\s*filename\*\s*=\s*(?:"([^"\r\n]*)"|([^;\r\n]*))/i);
@@ -396,16 +473,20 @@ async function promptInlineDocument(details, mime, background = false) {
     const stored = await chrome.storage.local.get({ "opendl-takeover": true, "opendl-inline-formats": globalThis.openDLResourceTypes.defaultInlineFormats });
     if (stored["opendl-takeover"] === false) return;
     const formats = new Set(String(stored["opendl-inline-formats"]).toLowerCase().split(/[\s,;]+/).map((x) => x.replace(/^\./, "")).filter((x) => /^[a-z0-9]{1,16}$/.test(x)));
-    const candidate = documentCandidate(details, mime, formats, background);
+    const candidate = documentCandidate(details, mime, formats, background) ||
+      (!background && directMediaMime.has(mime) ? { ext: directMediaMime.get(mime), filename: responseFilename(details.responseHeaders) } : null);
     if (!candidate) return;
+    const fileSize = responseFileSize(details);
     if (background) {
       // Background requests can be ordinary page data. Offer them in the
       // resource list without starting a desktop prompt or reading cookies.
       const pageUrl = (details.documentUrl || details.initiator || "").slice(0, 4096);
       await enqueuePlaylistChange(async () => {
         const entries = await playlistsFor(details.tabId);
-        if (entries.has(details.url)) return;
-        entries.set(details.url, { url: details.url, ext: candidate.ext, kind: "network:document", pageUrl, frameId: details.frameId, downloadAttr: candidate.filename });
+        const existing = entries.get(details.url);
+        if (existing && (fileSize === undefined || existing.fileSize === fileSize)) return;
+        const item = existing || { url: details.url, ext: candidate.ext, kind: "network:document", pageUrl, frameId: details.frameId, downloadAttr: candidate.filename };
+        entries.set(details.url, { ...item, fileSize });
         if (entries.size > 100) entries.delete(entries.keys().next().value);
         scheduleBadge(details.tabId);
         notifyPopupResources(details.tabId);
@@ -420,7 +501,7 @@ async function promptInlineDocument(details, mime, background = false) {
       await captureNotice(localize("无法获取浏览器登录状态，请从扩展资源列表重试"));
       return;
     }
-    const reply = await sendToDesktop({ type: "prompt", url: details.url, pageUrl, title: "", filename: candidate.filename, mediaMode: "", mediaQuality: "", queue: "", cookie },
+    const reply = await sendToDesktop({ type: "prompt", url: details.url, pageUrl, title: "", filename: candidate.filename, mediaMode: "", mediaQuality: "", queue: "", cookie, fileSize },
       { tabId: details.tabId, url: details.url, pageUrl, queue: "", useBrowserCookies: false });
     if (!reply?.ok) await captureNotice(reply?.deliveryUnknown ? localize("无法确认桌面端是否收到任务，请先检查桌面任务列表") : ((reply && reply.reason) || localize("桌面端或原生主机不可用")));
   } catch {}
@@ -455,7 +536,12 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
   }
   // The desktop fetches resources with GET. A POST/HEAD response cannot be
   // assumed to identify a replayable download at the same address.
-  if (details.method !== "GET") return;
+  if (details.method !== "GET") {
+    const disposition = details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-disposition")?.value || "";
+    const fileResponse = /^\s*attachment(?:\s*;|\s*$)/i.test(disposition) || mime === "application/octet-stream" || documentMimes.has(mime) || directMediaMime.has(mime);
+    if (details.statusCode >= 200 && details.statusCode < 300 && fileResponse) rememberDownloadContext(details);
+    return;
+  }
   const playlistExt = playlistMime.get(mime);
   const disposition = details.responseHeaders?.find((h) => h.name.toLowerCase() === "content-disposition")?.value || "";
   // Explicit attachments can use dynamic URLs with no useful suffix, such as
@@ -469,8 +555,9 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
   const pageUrl = (details.documentUrl || "").length <= 4096 && /^https?:/i.test(details.documentUrl || "") ? details.documentUrl : "";
   void enqueuePlaylistChange(async () => {
     const entries = await playlistsFor(details.tabId);
+    const fileSize = responseFileSize(details) ?? asFileSize(entries.get(details.url)?.fileSize);
     entries.delete(details.url);
-    entries.set(details.url, { url: details.url, ext: ext || "", kind: playlistExt ? "network:playlist" : ext ? "network:media" : "network:attachment", pageUrl, frameId: details.frameId });
+    entries.set(details.url, { url: details.url, ext: ext || "", kind: playlistExt ? "network:playlist" : ext ? "network:media" : "network:attachment", pageUrl, frameId: details.frameId, fileSize });
     if (entries.size > 100) entries.delete(entries.keys().next().value);
     scheduleBadge(details.tabId);
     notifyPopupResources(details.tabId);
@@ -480,6 +567,7 @@ chrome.webRequest.onHeadersReceived.addListener((details) => {
 
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId === 0) {
+    for (const [key, entry] of fileSizeLookups) if (entry.tabId === details.tabId) fileSizeLookups.delete(key);
     badgeRevisions.set(details.tabId, (badgeRevisions.get(details.tabId) || 0) + 1);
     clearTimeout(badgeTimers.get(details.tabId));
     badgeTimers.delete(details.tabId);
@@ -503,6 +591,7 @@ chrome.webNavigation.onCommitted.addListener((details) => {
   });
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
+  for (const [key, entry] of fileSizeLookups) if (entry.tabId === tabId) fileSizeLookups.delete(key);
   badgeRevisions.delete(tabId);
   clearTimeout(badgeTimers.get(tabId));
   badgeTimers.delete(tabId);
@@ -646,6 +735,11 @@ async function sendToDesktop(payload, msg) {
       (payload.mediaQuality && !mediaCapabilities.has("media-quality")) ||
       (payload.audioLanguage && !mediaCapabilities.has("media-audio-language"))) {
     return { ok: false, reason: localize("原生主机版本不支持媒体下载选项，请更新原生主机") };
+  }
+  if (payload.type === "prompt" && !payload.mediaMode && payload.fileSize === undefined && !payload.expectedBytes && Number.isInteger(msg.tabId)) {
+    try {
+      payload.fileSize = await enqueuePlaylistChange(async () => asFileSize((await playlistsFor(msg.tabId)).get(payload.url)?.fileSize));
+    } catch {}
   }
   if (msg.useBrowserCookies) {
     try {
@@ -818,17 +912,20 @@ chrome.downloads.onCreated.addListener((item) => {
     try {
       // Never intercept this extension's own browser fallback downloads.
       if (!item || item.byExtensionId === chrome.runtime.id) return;
-      const url = String(item.url || "");
+      let url = String(item.url || "");
       if (url.length > 4096 || !/^https?:/i.test(url)) return;
       const now = Date.now();
       for (const [released, expiry] of releasedURLs) {
         if (expiry <= now) releasedURLs.delete(released);
       }
-      const release = releasedURLs.get(url);
+      const releaseURL = normalizeDownloadURL(url) || normalizeDownloadURL(String(item.finalUrl || ""));
+      const release = releasedURLs.get(releaseURL);
       if (release && release > now) {
-        releasedURLs.delete(url);
+        releasedURLs.delete(releaseURL);
         return;
       }
+      const contexts = [url, item.finalUrl].flatMap((address) => downloadContexts.get(address) || []);
+      if (contexts.some((entry) => now - entry.at < DOWNLOAD_CONTEXT_TTL && entry.method && entry.method !== "GET")) return;
       if (!(await takeoverEnabled())) return;
       // Pause immediately while checking the native host, preventing fast
       // transfers from completing during the asynchronous handshake.
@@ -843,6 +940,13 @@ chrome.downloads.onCreated.addListener((item) => {
         try { await chrome.downloads.resume(item.id); } catch {}
         return;
       }
+      // Use the browser's actual file target after its redirects and scripts.
+      url = normalizeDownloadURL(String(fresh.finalUrl || item.finalUrl || "")) ||
+        normalizeDownloadURL(String(fresh.url || item.url || ""));
+      if (url.length > 4096 || !/^https?:/i.test(url)) {
+        try { await chrome.downloads.resume(item.id); } catch {}
+        return;
+      }
       const filename = fallbackFilename(String(fresh.filename || item.filename || "").split(/[\\/]/).pop() || "");
       let sourceTab = null, cookie = "";
       const sourceItem = { ...item, ...fresh };
@@ -850,7 +954,7 @@ chrome.downloads.onCreated.addListener((item) => {
       const tabId = sourceTab?.id;
       const title = sourceTab?.title || "";
       const pageUrl = String(sourceItem.referrer || sourceTab?.url || "").slice(0, 4096);
-      const coremailURL = isCoremailAttachmentDownload(sourceItem.finalUrl) ? sourceItem.finalUrl : url;
+      const coremailURL = [sourceItem.url, sourceItem.finalUrl].find(isCoremailAttachmentDownload) || url;
       if (isCoremailAttachmentDownload(coremailURL)) {
         await handoffCoremailAttachment(sourceItem, coremailURL, sourceTab, pageUrl, filename);
         return;
@@ -877,6 +981,7 @@ chrome.downloads.onCreated.addListener((item) => {
           title,
           filename,
           cookie,
+          fileSize: asFileSize(sourceItem.fileSize),
           mediaMode: "",
           mediaQuality: "",
           queue: ""
@@ -901,6 +1006,19 @@ chrome.downloads.onCreated.addListener((item) => {
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "resourceFileSize" && sender?.url?.split("#")[0].split("?")[0] === chrome.runtime.getURL("popup.html") &&
+      Number.isInteger(msg.tabId) && typeof msg.url === "string") {
+    probeResourceFileSize(msg).then((fileSize) => sendResponse({ fileSize }), () => sendResponse({}));
+    return true;
+  }
+  if (["takeoverLink", "download", "prompt", "releaseDownload"].includes(msg?.type) && typeof msg.url === "string") {
+    const url = normalizeDownloadURL(msg.url);
+    if (!url) {
+      sendResponse({ ok: false, reason: localize("没有可下载的资源") });
+      return false;
+    }
+    msg = { ...msg, url };
+  }
   if (msg?.type === "takeoverLink" && Number.isInteger(sender?.tab?.id) &&
       typeof msg.url === "string" && msg.url.length <= 4096 && /^https?:/i.test(msg.url)) {
     const tabId = sender.tab.id;
@@ -994,6 +1112,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       pageUrl: msg.pageUrl || (sender && sender.tab && sender.tab.url) || "",
       title: msg.title || (sender && sender.tab && sender.tab.title) || "",
       filename: msg.filename || "",
+      fileSize: msg.type === "prompt" && !msg.mediaMode ? asFileSize(msg.fileSize) : undefined,
       mediaMode: msg.mediaMode || "",
       mediaQuality: msg.mediaQuality || "",
       audioLanguage: msg.audioLanguage || "",

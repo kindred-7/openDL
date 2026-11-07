@@ -233,8 +233,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ping":
-		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay"}})
-	case r.Method == http.MethodPost && (r.URL.Path == "/api/download" || r.URL.Path == "/api/prompt"):
+		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay", "file-size-probe"}})
+	case r.Method == http.MethodPost && (r.URL.Path == "/api/download" || r.URL.Path == "/api/prompt" || r.URL.Path == "/api/probe"):
 		var req download.Request
 		if err := readJSON(w, r, &req, 1<<20); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("下载请求格式无效"))
@@ -243,6 +243,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if req.ExpectedBytes < 0 {
 			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("下载请求格式无效"))
 			return
+		}
+		if r.URL.Path != "/api/prompt" || (req.FileSize != nil && *req.FileSize < 0) {
+			req.FileSize = nil
 		}
 		req.URL = strings.TrimSpace(req.URL)
 		u, err := url.Parse(req.URL)
@@ -295,6 +298,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_request_id", i18n.T("下载请求编号格式无效"))
 			return
 		}
+		if r.URL.Path == "/api/probe" {
+			writeJSON(w, map[string]any{"fileSize": s.Mgr.ProbeFileSize(r.Context(), req)})
+			return
+		}
 		// The prompt endpoint is the browser integration's entry point. Older
 		// native hosts do not send the source header, so retain their origin
 		// when the user confirms the download in the desktop dialog.
@@ -312,7 +319,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 				req.ClientRequestID = hex.EncodeToString(id[:])
 			}
-			encoded, _ := json.Marshal(req)
+			identity := req
+			identity.FileSize = nil // The display hint can become available between retries.
+			encoded, _ := json.Marshal(identity)
 			digest := sha256.Sum256(encoded)
 			s.promptMu.Lock()
 			if s.promptIDs == nil {

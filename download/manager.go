@@ -48,6 +48,7 @@ type Request struct {
 	KeepExtension bool              `json:"keepExtension,omitempty"`
 	Headers       map[string]string `json:"headers,omitempty"`
 	ExpectedBytes int64             `json:"expectedBytes,omitempty"` // original browser attachment size, zero if unknown
+	FileSize      *int64            `json:"fileSize,omitempty"`      // display hint for the browser prompt only
 	// Connections is how many parallel Range connections this task uses;
 	// Zero takes the manager default; -1 selects automatic adaptation.
 	Connections      int    `json:"connections,omitempty"`
@@ -1560,7 +1561,11 @@ func (m *Manager) download(t *Task) error {
 	// The initial request must describe the complete representation.
 	req.Header.Del("Range")
 	req.Header.Del("If-Range")
-	resp, err := m.doWithRetry(t, req)
+	rejectHTML := t.browserOrigin && !isHTMLFilename(t.nameHint) && !isHTMLFilename(pathrec.FromURLPath(address))
+	send := func(request *http.Request) (*http.Response, error) {
+		return m.doWithRetry(t, request)
+	}
+	resp, err := resolveDownloadResponse(req, rejectHTML, send)
 	if err != nil {
 		return err
 	}
@@ -1772,7 +1777,7 @@ func (m *Manager) download(t *Task) error {
 			}
 			fresh.Header.Del("Range")
 			fresh.Header.Del("If-Range")
-			freshResp, requestErr := m.doWithRetry(t, fresh)
+			freshResp, requestErr := resolveDownloadResponse(fresh, rejectHTML, send)
 			if requestErr != nil {
 				freshCancel()
 				return requestErr
@@ -1830,7 +1835,7 @@ func (m *Manager) download(t *Task) error {
 		defer fullCancel()
 		fullReq.Header.Del("Range")
 		fullReq.Header.Del("If-Range")
-		fullResp, err := m.doWithRetry(t, fullReq)
+		fullResp, err := resolveDownloadResponse(fullReq, rejectHTML, send)
 		if err != nil {
 			return err
 		}

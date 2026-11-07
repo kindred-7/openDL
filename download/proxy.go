@@ -687,9 +687,9 @@ func (m *Manager) UpdateTransport() http.RoundTripper {
 	return m.proxy
 }
 
-// DoResourceRequest lets page-link extraction share the configured route and
+// DoResourceRequest lets page-link extraction and size probes share the configured route and
 // connection limits, while the caller supplies its own deadline and body limit.
-// The loopback API and native messaging do not use this transport.
+// Loopback requests to the desktop itself do not use this transport.
 func (m *Manager) DoResourceRequest(request *http.Request) (*http.Response, error) {
 	if request == nil || request.URL == nil || (request.URL.Scheme != "http" && request.URL.Scheme != "https") {
 		return nil, fmt.Errorf(i18n.T("资源请求只支持 HTTP 或 HTTPS"))

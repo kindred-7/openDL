@@ -4,6 +4,7 @@ const localize = globalThis.openDLI18n.t;
 
 const MEDIA_KINDS = new Set(["video", "audio", "source", "network:media", "network:video", "network:playlist"]);
 const MEDIA_EXT = globalThis.openDLResourceTypes.media;
+const { asFileSize } = globalThis.openDLResourceTypes;
 
 document.getElementById("extension-version").textContent = localize("版本：%s", chrome.runtime.getManifest().version);
 
@@ -94,6 +95,7 @@ let displayedTabId = null;
 let pageStale = false;
 let batchBusy = false, singleBusy = 0, scanBusy = false, renderVersion = 0;
 let refreshPending = false, refreshTimer = null;
+let sizeProbeGeneration = 0;
 
 function scheduleResourceRefresh() {
   refreshPending = true;
@@ -253,6 +255,7 @@ async function loadLoginSetting() {
     settingsRetry.classList.add("hidden");
     if (!(stored[loginKey] && !granted)) settingsStatus.textContent = "";
     updateControls();
+    void probeResourceSizes();
   } catch {
     settingsStatus.textContent = localize("无法读取浏览器登录设置");
     loginWarning.textContent = localize("无法读取浏览器登录设置，请在设置中重试后再发送资源。");
@@ -292,6 +295,7 @@ loginOption.addEventListener("change", async () => {
     loginOption.disabled = false;
     loginSettingReady = true;
     updateControls();
+    void probeResourceSizes();
   }
 });
 chrome.permissions.onRemoved.addListener((removed) => {
@@ -302,6 +306,7 @@ chrome.permissions.onRemoved.addListener((removed) => {
   loginOption.checked = false;
   loginWarning.textContent = localize("浏览器登录权限已失效，请在设置中重新授权；当前下载不会使用登录状态。");
   settingsStatus.textContent = localize("未获得浏览器 Cookie 权限");
+  void probeResourceSizes();
 });
 loadLoginSetting();
 
@@ -406,7 +411,8 @@ async function sniff(forceRules = false, onProgress = null) {
         resources.set(item.url, {
           ...preferred,
           downloadAttr: preferred.downloadAttr || other.downloadAttr || "",
-          text: preferred.text || other.text || ""
+          text: preferred.text || other.text || "",
+          fileSize: asFileSize(old.fileSize) ?? asFileSize(fromTab.fileSize)
         });
       }
     }
@@ -441,7 +447,7 @@ async function sniff(forceRules = false, onProgress = null) {
         // A playlist MIME takes precedence; otherwise keep a known filename
         // suffix and use the MIME-derived type for extensionless resources.
         const ext = item.ext && (item.kind === "network:playlist" || !MEDIA_EXT.has(old.ext)) ? item.ext : old.ext;
-        resources.set(item.url, { ...old, ext, kind: MEDIA_KINDS.has(old.kind) ? old.kind : item.kind });
+        resources.set(item.url, { ...old, ext, kind: MEDIA_KINDS.has(old.kind) ? old.kind : item.kind, fileSize: asFileSize(item.fileSize) ?? asFileSize(old.fileSize) });
       } else {
         const frame = frames.find((entry) => entry.frameId === item.frameId);
         resources.set(item.url, { ...item, pageUrl: item.pageUrl || frame?.url || tab.url || "", title: tab.title || "", tabId: tab.id });
@@ -472,6 +478,55 @@ function resourceName(item) {
     if (part) { try { return decodeURIComponent(part); } catch { return part; } }
   } catch {}
   return localize("未命名资源");
+}
+
+function formatFileSize(bytes) {
+  if (bytes >= 2 ** 30) return `${(bytes / 2 ** 30).toFixed(2)} GB`;
+  if (bytes >= 2 ** 20) return `${(bytes / 2 ** 20).toFixed(1)} MB`;
+  if (bytes >= 2 ** 10) return `${(bytes / 2 ** 10).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
+function resourceSizeText(item) {
+  const size = asFileSize(item.fileSize);
+  if (size === undefined) return localize(item.fileSizePending ? "正在获取大小…" : "大小未知");
+  const text = formatFileSize(size);
+  return item.ext === "m3u8" || item.ext === "mpd" ? localize("清单大小：%s", text) : text;
+}
+
+function updateResourceSize(item) {
+  const element = [...listEl.children].find((row) => row.dataset.url === item.url)?.querySelector(".file-size");
+  if (element) element.textContent = resourceSizeText(item);
+}
+
+async function probeResourceSizes() {
+  if (!loginSettingReady || scanBusy || pageStale || !Number.isInteger(displayedTabId)) return;
+  const generation = ++sizeProbeGeneration;
+  const version = renderVersion;
+  const usesCookies = useBrowserCookies;
+  const pending = currentResources.filter((item) => asFileSize(item.fileSize) === undefined);
+  let next = 0;
+  const current = () => generation === sizeProbeGeneration && version === renderVersion && !pageStale && usesCookies === useBrowserCookies;
+  await Promise.all(Array.from({ length: Math.min(4, pending.length) }, async () => {
+    while (current() && next < pending.length) {
+      const item = pending[next++];
+      item.fileSizePending = true;
+      item.fileSizeProbeGeneration = generation;
+      updateResourceSize(item);
+      try {
+        const reply = await withTimeout(chrome.runtime.sendMessage({
+          type: "resourceFileSize", url: item.url, tabId: item.tabId,
+          pageUrl: item.pageUrl || "", useBrowserCookies: usesCookies
+        }), 20000);
+        if (current()) item.fileSize = asFileSize(reply?.fileSize);
+      } catch {} finally {
+        if (item.fileSizeProbeGeneration === generation) {
+          item.fileSizePending = false;
+          if (current()) updateResourceSize(item);
+        }
+      }
+    }
+  }));
 }
 
 function matchingResources() {
@@ -512,6 +567,13 @@ function row(item) {
   name.className = "name";
   name.textContent = resourceName(item);
   name.title = name.textContent;
+  const playlist = item.ext === "m3u8" || item.ext === "mpd";
+  const size = document.createElement("div");
+  size.className = "file-size";
+  size.textContent = resourceSizeText(item);
+  const info = document.createElement("div");
+  info.className = "resource-info";
+  info.append(name, size);
   const ext = typeof item.ext === "string" ? item.ext.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 8) : "";
   const kind = document.createElement("span");
   kind.className = "file-kind";
@@ -525,7 +587,6 @@ function row(item) {
   const btn = document.createElement("button");
   btn.dataset.key = item.url;
   btn.dataset.mode = "file";
-  const playlist = item.ext === "m3u8" || item.ext === "mpd";
   btn.textContent = sentURLs.has(item.url) ? localize("再次下载") : (playlist ? localize("下载清单") : localize("下载"));
   btn.setAttribute("aria-label", btn.textContent + " " + resourceName(item));
   btn.title = btn.textContent;
@@ -546,6 +607,7 @@ function row(item) {
         pageUrl: item.pageUrl,
         title: item.title,
         filename: item.downloadAttr || "",
+        fileSize: mediaMode ? undefined : asFileSize(item.fileSize),
         tabId: item.tabId,
         mediaMode,
         submissionNonce: crypto.randomUUID(),
@@ -597,7 +659,7 @@ function row(item) {
   btn.addEventListener("click", () => send(btn));
   div.appendChild(checkbox);
   div.appendChild(kind);
-  div.appendChild(name);
+  div.appendChild(info);
   if (item.ext === "m3u8" || item.ext === "mpd") {
     const mode = item.ext === "mpd" ? "dash-fmp4" : "hls-ts";
     const video = document.createElement("button");
@@ -688,6 +750,7 @@ async function render(forceRules = false) {
   statusEl.textContent = silentError ? "" : (error || "");
   renderResourceList(!error || silentError);
   updateControls();
+  if (!error) void probeResourceSizes();
 }
 
 async function downloadBatch(resources, partialScan) {
@@ -696,7 +759,7 @@ async function downloadBatch(resources, partialScan) {
   const rows = new Map([...listEl.children].map((element) => [element.dataset.url, element]));
   for (const item of resources) {
     try {
-      const r = await chrome.runtime.sendMessage({ type: "prompt", url: item.url, pageUrl: item.pageUrl, title: item.title, filename: item.downloadAttr || "", tabId: item.tabId, queue: "", submissionNonce: crypto.randomUUID(), useBrowserCookies: batchUsesBrowserCookies });
+      const r = await chrome.runtime.sendMessage({ type: "prompt", url: item.url, pageUrl: item.pageUrl, title: item.title, filename: item.downloadAttr || "", fileSize: asFileSize(item.fileSize), tabId: item.tabId, queue: "", submissionNonce: crypto.randomUUID(), useBrowserCookies: batchUsesBrowserCookies });
       if (!r || r.deliveryUnknown) {
         uncertain++;
         markUncertain(item.url, rows.get(item.url)?.querySelector('button[data-mode="file"]'));

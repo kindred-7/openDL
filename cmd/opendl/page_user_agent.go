@@ -53,7 +53,7 @@ func (s *settingsPage) userAgentFields(c *ui.Context, p *d1Palette) {
 		d1Button(c, p, "应用", "").Width(buttonWidth).Height(settingsInputHeight).Shrink(0).Padding(0, 6).
 			Disabled(!s.userAgentDirty).OnClick(s.applyUserAgent)
 		restorePalette := *p
-		restorePalette.bg, restorePalette.fg, restorePalette.bd = p.fg, p.bg, p.fg
+		restorePalette.control, restorePalette.fg, restorePalette.bd = p.fg, p.bg, p.fg
 		restorePalette.hover = p.fg.Mix(p.bg, 0.12)
 		d1Button(c, &restorePalette, "恢复", "").Width(buttonWidth).Height(settingsInputHeight).Shrink(0).Padding(0, 6).
 			Label(tr("恢复默认")).Tooltip(tr("恢复默认")).OnClick(s.restoreDefaultUserAgent)

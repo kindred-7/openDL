@@ -31,6 +31,18 @@
   ]);
   const defaultInlineFormats = "pdf, doc, docx, xls, txt, json, png, jpg, xml";
 
+  function asFileSize(value) {
+    return Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+  }
+
+  function normalizeDownloadURL(value) {
+    try {
+      const url = new URL(value);
+      return /^https?:$/.test(url.protocol) ? url.href : "";
+    } catch {}
+    return "";
+  }
+
   function isCoremailAttachmentDownload(value) {
     if (typeof value !== "string" || !/^https?:\/\/[^/?#]+\/(?:js\d+|coremail)\/s\?/.test(value)) return false;
     try {
@@ -42,5 +54,6 @@
     }
   }
 
-  globalThis.openDLResourceTypes = Object.freeze({ media, downloadable, discoverable, playlistMime, directMediaMime, defaultInlineFormats, isCoremailAttachmentDownload });
+  // Keep the former helper export available to already loaded content scripts.
+  globalThis.openDLResourceTypes = Object.freeze({ media, downloadable, discoverable, playlistMime, directMediaMime, defaultInlineFormats, asFileSize, normalizeDownloadURL, resolveBlenderDownload: normalizeDownloadURL, isCoremailAttachmentDownload });
 })();

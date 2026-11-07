@@ -18,7 +18,7 @@
     "gi"
   );
 
-  const { downloadable: DOWNLOAD_EXT, isCoremailAttachmentDownload } = globalThis.openDLResourceTypes;
+  const { downloadable: DOWNLOAD_EXT, asFileSize, normalizeDownloadURL, isCoremailAttachmentDownload } = globalThis.openDLResourceTypes;
   const LINK_EXT = globalThis.openDLResourceTypes.discoverable;
   let customFormats = new Set(), customFormatRevision = 0;
   const parseCustomFormats = (value) => new Set(String(value || "").toLowerCase().split(/[\s,;]+/).map((x) => x.replace(/^\./, "")).filter((x) => /^[a-z0-9]{1,16}$/.test(x)).slice(0, 64));
@@ -303,6 +303,7 @@
     return 1;
   };
   const add = (url, kind, extra) => {
+    url = normalizeDownloadURL(url);
     if (!url || !/^https?:/i.test(url)) return;
     const { ruleOnly = false, customOnly = false, ...metadata } = extra || {};
     const key = url;
@@ -315,6 +316,10 @@
       if (metadata.downloadAttr && !existing.downloadAttr) existing.downloadAttr = metadata.downloadAttr;
       if (metadata.text && !existing.text) existing.text = metadata.text;
       if (metadata.player && !existing.player) existing.player = true;
+      if (metadata.fileSize !== undefined && existing.fileSize === undefined) {
+        existing.fileSize = metadata.fileSize;
+        notifyResourcesChanged();
+      }
       if (rank(kind) > rank(existing.kind)) {
         existing.kind = kind;
         if (metadata.ext) existing.ext = metadata.ext;
@@ -355,6 +360,8 @@
         if (!suffix || !(LINK_EXT.has(extOf(u.slice(0, suffix.index))) || customFormats.has(extOf(u.slice(0, suffix.index))))) break;
         u = u.slice(0, suffix.index);
       }
+      u = normalizeDownloadURL(u);
+      if (!u) continue;
       const ext = extOf(u);
       const rule = matchSiteRule(u);
       if (LINK_EXT.has(ext) || customFormats.has(ext) || rule) add(u, "link", { via: "text", ruleOnly: !LINK_EXT.has(ext) && !customFormats.has(ext), customOnly: !LINK_EXT.has(ext) && customFormats.has(ext) && !rule });
@@ -381,10 +388,12 @@
       if (el.src) add(el.src, "iframe");
     }
     for (const a of matching("a[href]")) {
-      const ext = extOf(a.href);
-      const rule = matchSiteRule(a.href);
+      const url = normalizeDownloadURL(a.href);
+      if (!url) continue;
+      const ext = extOf(url);
+      const rule = matchSiteRule(url);
       if (LINK_EXT.has(ext) || customFormats.has(ext) || rule || a.hasAttribute("download")) {
-        add(a.href, "link", {
+        add(url, "link", {
           text: (a.innerText || a.title || "").trim().slice(0, 120),
           downloadAttr: a.getAttribute("download") || "",
           ruleOnly: !LINK_EXT.has(ext) && !customFormats.has(ext) && !a.hasAttribute("download"),
@@ -412,6 +421,9 @@
     const rule = matchSiteRule(e.name);
     if (DOWNLOAD_EXT.has(ext) || customFormats.has(ext) || rule || e.initiatorType === "media" || e.initiatorType === "video") {
       add(e.name, "network:" + e.initiatorType, {
+        // A hidden cross-origin timing size can be zero. Partial responses
+        // need Content-Range, which the background observer reads instead.
+        fileSize: e.responseStatus === 200 && e.decodedBodySize > 0 ? asFileSize(e.decodedBodySize) : undefined,
         ruleOnly: !DOWNLOAD_EXT.has(ext) && !customFormats.has(ext) && e.initiatorType !== "media" && e.initiatorType !== "video",
         customOnly: !DOWNLOAD_EXT.has(ext) && customFormats.has(ext) && !rule && e.initiatorType !== "media" && e.initiatorType !== "video",
         ...(rule?.ext && !ext ? { ext: rule.ext } : {})
@@ -504,8 +516,6 @@
       return url.origin === location.origin && url.pathname === "/multiple-download" && Boolean(url.searchParams.get("token"));
     } catch { return false; }
   };
-  const matchesDownloadLink = (url, hasDownload) => hasDownload || DOWNLOAD_EXT.has(extOf(url)) ||
-    Boolean(matchSiteRule(url)) || isNASTokenDownload(url);
   const sendLinkTakeover = (url, filename) => chrome.runtime.sendMessage({
     type: "takeoverLink", url, pageUrl: location.href,
     title: document.title || "", filename
@@ -527,10 +537,9 @@
       if (!data || !["anchor", "open", "frame"].includes(data.kind) ||
           typeof data.url !== "string" || data.url.length > 4096 || !/^https?:/i.test(data.url)) return;
       if (isCoremailAttachmentDownload(data.url)) return;
-      // A frame may be a document viewer, so only intercept the known NAS
-      // token endpoint there, never arbitrary embedded PDF/media documents.
-      if (data.kind === "frame" ? !isNASTokenDownload(data.url) :
-          !matchesDownloadLink(data.url, data.kind === "anchor" && data.hasDownload === true)) return;
+      // Let page scripts generate their real download request. The existing
+      // NAS token endpoint keeps its established early handoff.
+      if (!isNASTokenDownload(data.url)) return;
       const filename = typeof data.filename === "string" ? data.filename.slice(0, 1024) : "";
       const request = sendLinkTakeover(data.url, filename);
       event.preventDefault();
@@ -554,9 +563,9 @@
     }
   });
 
-  // Capture user clicks and script-dispatched clicks on connected anchors.
-  // Detached anchor.click() calls are covered by the MAIN-world bridge above.
-  // Alt+click forces takeover; Shift+click releases one browser download.
+  // Ordinary clicks run the site's navigation and scripts. The background
+  // captures the resulting file request. Alt+click forces an early handoff;
+  // Shift+click releases one browser download.
   document.addEventListener(
     "click",
     (event) => {
@@ -573,15 +582,13 @@
         // The background takes over Coremail after the browser sends its request.
         if (event.ctrlKey || event.metaKey) return;
         if (clickTakeoverEnabled && isCoremailAttachmentDownload(url)) return;
-        const matches = matchesDownloadLink(url, anchor.hasAttribute("download"));
-        if (!event.altKey && (!clickTakeoverEnabled || !matches)) return;
+        if (!event.altKey && (!clickTakeoverEnabled || !isNASTokenDownload(url))) return;
         const request = sendLinkTakeover(url, anchor.getAttribute("download") || "");
         event.preventDefault();
-        event.stopImmediatePropagation();
         reportTakeover(request);
       } catch {}
     },
-    true
+    false
   );
 
   // ---- page-world sniffer bridge ------------------------------------------

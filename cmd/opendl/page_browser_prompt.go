@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -21,6 +23,9 @@ type browserDownloadWindow struct {
 	suggestedName                 string
 	keepExtension, saving, closed bool
 	rememberDir                   bool
+	linkCopiedUntil               time.Time
+	sizeLoading                   bool
+	sizeCancel                    context.CancelFunc
 }
 
 func (pg *mainPage) openBrowserDownload(req download.Request) {
@@ -34,6 +39,7 @@ func (pg *mainPage) openBrowserDownload(req download.Request) {
 	if req.Directory != "" {
 		d.directory = req.Directory
 	}
+	d.sizeLoading = pg.mgr != nil && req.MediaMode == "" && req.FileSize == nil && req.ExpectedBytes == 0
 	w := mygo.NewWindow(mygo.WindowOptions{
 		Title: d.title(), Width: 520, Height: 320, MinWidth: 420, MinHeight: 290, AlwaysOnTop: true,
 		TitleBarStyle: mygo.TitleBarHidden, TitleBarHeight: int(style.HeightTitleBar),
@@ -48,12 +54,30 @@ func (pg *mainPage) openBrowserDownload(req download.Request) {
 	w.OnClosed(func() {
 		delete(pg.browserPromptWindows, w)
 		d.closed = true
+		if d.sizeCancel != nil {
+			d.sizeCancel()
+		}
 		d.req.Headers = nil
 		d.win = nil
 		if pg.browserPromptSlot != nil {
 			pg.browserPromptSlot()
 		}
 	})
+	if d.sizeLoading {
+		ctx, cancel := context.WithCancel(context.Background())
+		d.sizeCancel = cancel
+		go func() {
+			defer cancel()
+			size := pg.mgr.ProbeFileSize(ctx, req)
+			w.Update(func() {
+				if d.closed {
+					return
+				}
+				d.sizeLoading = false
+				d.req.FileSize = size
+			})
+		}()
+	}
 }
 
 func (d *browserDownloadWindow) title() string {
@@ -68,12 +92,44 @@ func (d *browserDownloadWindow) view(c *ui.Context) {
 	base := d.owner.baseTheme()
 	p := base.palette
 	c.SetTheme(base.theme)
+	size := tr("未知")
+	if d.sizeLoading {
+		size = tr("正在获取…")
+	}
+	if d.req.MediaMode == "" {
+		switch {
+		case d.req.ExpectedBytes > 0:
+			size = bytesText(d.req.ExpectedBytes)
+		case d.req.FileSize != nil:
+			size = bytesText(*d.req.FileSize)
+		}
+	}
 	ui.Column(c).Fill().Background(p.bg).Children(func() {
 		d1WindowTitleBar(c, p, d.title(), "down")
 		ui.Column(c).FillWidth().Grow(1).Shrink(1).Basis(0).Padding(16).Gap(12).Children(func() {
 			ui.Column(c).FillWidth().MinWidth(0).Gap(5).Children(func() {
-				ui.Text(c, tr("下载链接")).FontSize(style.TextSM).TextColor(p.mu)
-				ui.Text(c, d.req.URL).Selectable().Tooltip(d.req.URL).FillWidth().MinWidth(0).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
+				ui.Row(c).FillWidth().Gap(8).Justify(ui.SpaceBetween).Children(func() {
+					ui.Text(c, tr("下载链接")).FontSize(style.TextSM).TextColor(p.mu)
+					ui.Text(c, tr("文件大小")+tr("：")+size).FontSize(style.TextSM).TextColor(p.mu).SingleLine()
+				})
+				ui.Row(c).FillWidth().Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, d.req.URL).Selectable().Tooltip(d.req.URL).Grow(1).Shrink(1).Basis(0).MinWidth(0).FontSize(style.TextSM).TextColor(p.fg).SingleLine()
+					remaining := time.Until(d.linkCopiedUntil)
+					copied := remaining > 0
+					if copied {
+						c.After(remaining)
+					}
+					svc, url := c.Services(), d.req.URL
+					button := d1CopyControl(c, p, "browser-copy-url", "复制下载链接", copied, true, url != "").Shrink(0)
+					if copied {
+						button.Tooltip(tr("已复制下载链接"))
+					}
+					button.OnClick(func() {
+						svc.WriteClipboard(url)
+						d.linkCopiedUntil = time.Now().Add(1600 * time.Millisecond)
+						svc.Invalidate()
+					})
+				})
 			})
 			ui.Column(c).FillWidth().Gap(5).Children(func() {
 				ui.Text(c, tr("保存到")).FontSize(style.TextSM).TextColor(p.mu)
@@ -120,6 +176,7 @@ func (d *browserDownloadWindow) submit() {
 		return
 	}
 	req := d.req
+	req.FileSize = nil
 	req.Directory, req.Name, req.KeepExtension = dir, d.name, d.keepExtension
 	if d.suggestedName != "" && d.name == d.suggestedName {
 		req.Name = ""

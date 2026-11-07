@@ -1,5 +1,8 @@
 {
   "m_extension_version": { "message": "版本：$ARG1$", "placeholders": { "arg1": { "content": "$1" } } },
+  "m_file_size_unknown": { "message": "大小未知" },
+  "m_file_size_loading": { "message": "正在获取大小…" },
+  "m_playlist_size": { "message": "清单大小：$ARG1$", "placeholders": { "arg1": { "content": "$1" } } },
   "m_sniff_formats": { "message": "自定义嗅探格式" },
   "m_sniff_formats_placeholder": { "message": "例如：mobi, epub, psd" },
   "m_sniff_formats_hint": { "message": "追加格式，用逗号、空格或换行分隔；不影响下载接管。" },

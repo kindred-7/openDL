@@ -77,7 +77,9 @@ button:disabled { color: var(--mu2); cursor: default; }
 .row { display: flex; align-items: center; gap: 8px; padding: 10px 0; }
 .row input { flex: none; accent-color: var(--pri); }
 .row button { flex: none; }
-.name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.resource-info { flex: 1; min-width: 0; }
+.name, .file-size { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-size { margin-top: 2px; color: var(--mu); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 /* 底部工具栏：macOS 摩擦条 28px，三栏网格让连接状态居中；文字按钮保持中性灰、悬停加深，主色留给任务页主按钮 */
 .footer { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-height: 44px;
