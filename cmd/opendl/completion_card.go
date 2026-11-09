@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"time"
 
@@ -52,8 +53,9 @@ func (pg *mainPage) showNextCompletionCard() {
 	if item.name == "" {
 		item.name = filepath.Base(item.path)
 	}
-	// Leave enough room for both action labels and the full bottom padding.
-	const cardWidth, cardHeight, inset = 380, 160, 16
+	// Leave enough room for the three equally sized action labels and the
+	// full bottom padding.
+	const cardWidth, cardHeight, inset = 440, 160, 16
 	area := mygo.Screen.PrimaryDisplay().WorkArea
 	width, height := cardWidth, cardHeight
 	if area.Width > 0 {
@@ -85,6 +87,7 @@ func (pg *mainPage) showNextCompletionCard() {
 				hoverMotion(del, ui.Transparent, p.hover)
 				del.Children(func() { d1Icon(c, "trash", 16, p.mu) })
 				pg.completionDeleteMenu(c, p, del, win, item)
+				pg.completionCutControl(c, p, win, item)
 				d1Button(c, p, "打开文件夹", "folder").Grow(1).Shrink(1).Basis(0).OnClick(func() { win.Close(); pg.openLocalPath(filepath.Dir(item.path)) })
 				d1PrimaryButton(c, p, "打开文件", "file").Grow(1).Shrink(1).Basis(0).Center().OnClick(func() { win.Close(); pg.openLocalPath(item.path) })
 			})
@@ -96,8 +99,8 @@ func (pg *mainPage) showNextCompletionCard() {
 	win.OnClosed(func() {
 		if pg.completionWindow == win {
 			pg.completionWindow = nil
-			pg.completionMenuOpen, pg.completionMenuInside = false, false
-			pg.completionMenuClosePending = false
+			pg.completionDeleteMenuState = completionMenuState{}
+			pg.completionCutMenuState = completionMenuState{}
 			pg.completionCardInside = false
 			pg.showNextCompletionCard()
 		}
@@ -110,7 +113,7 @@ func (pg *mainPage) showNextCompletionCard() {
 				if pg.completionWindow != win {
 					return
 				}
-				if pg.completionMenuOpen || pg.completionCardInside {
+				if pg.completionDeleteMenuState.open || pg.completionCutMenuState.open || pg.completionCardInside {
 					// 菜单展开或指针仍在卡片上时推迟收起。
 					armClose(completionCardDefer)
 					return
@@ -122,52 +125,114 @@ func (pg *mainPage) showNextCompletionCard() {
 	armClose(completionCardTimeout)
 }
 
-// completionDeleteMenu 在删除按钮悬停或聚焦时展开两个删除选项，沿用更新
-// 徽标的悬停弹层行为：进入即展开，离开后短暂延迟收起。
-func (pg *mainPage) completionDeleteMenu(c *ui.Context, p *d1Palette, anchor ui.Element, win *mygo.Window, item completionCardItem) {
-	anchorInside := anchor.Hovered() || anchor.FocusVisible() || anchor.Pressed()
-	if anchorInside {
-		pg.completionMenuOpen = true
+// completionMenuState 记录一个悬停弹层的展开状态；删除与剪切的弹层各持一份。
+type completionMenuState struct {
+	open, inside, closePending bool
+}
+
+// completionMenuWidth 是悬停弹层的默认宽度。
+const completionMenuWidth = 180
+
+// completionHoverMenu 沿用更新徽标的悬停弹层行为：进入即展开，离开后短暂
+// 延迟收起。panelWidth 为面板宽度，非正时取默认值；openOn 判定锚点是否处于
+// 激活，items 构建面板条目。
+func (pg *mainPage) completionHoverMenu(c *ui.Context, p *d1Palette, anchor ui.Element, st *completionMenuState, win *mygo.Window, panelWidth float32, openOn bool, items func()) {
+	if panelWidth <= 0 {
+		panelWidth = completionMenuWidth
 	}
-	panel := ui.PopoverBase(c, anchor, &pg.completionMenuOpen, func(tip ui.Element) {
+	if openOn {
+		st.open = true
+	}
+	panel := ui.PopoverBase(c, anchor, &st.open, func(tip ui.Element) {
 		style.ShadowOverlay(tip.AttachTo(anchor, ui.AnchorTopStart, ui.AnchorBottomStart).Margin(0, 0, 4, 0).
-			Width(180).Padding(4).Radius(style.RadiusMD).Border(1, p.bd).Background(p.card)).Children(func() {
-			ui.Column(c).Gap(2).Children(func() {
-				pg.d1MenuIconItem(c, p, "trash", "删除任务", p.fg, func() {
-					pg.completionMenuOpen = false
-					win.Close()
-					pg.deleteCompletionTask(item, false)
-				})
-				pg.d1MenuIconItem(c, p, "trash", "删除任务和文件", p.bad, func() {
-					pg.completionMenuOpen = false
-					win.Close()
-					pg.deleteCompletionTask(item, true)
-				})
-			})
+			Width(panelWidth).Padding(4).Radius(style.RadiusMD).Border(1, p.bd).Background(p.card)).Children(func() {
+			ui.Column(c).Gap(2).Children(items)
 		})
 	})
 	panelInside := panel.Valid() && (panel.Hovered() || panel.FocusWithin())
-	pg.completionMenuInside = anchorInside || panelInside
-	if !pg.completionMenuInside {
-		pg.completionDeleteArmClose(win)
+	st.inside = openOn || panelInside
+	if !st.inside {
+		pg.completionMenuArmClose(win, st)
 	}
 }
 
-// completionDeleteArmClose 离开菜单后延迟收起，避免移入面板途中误关。
-func (pg *mainPage) completionDeleteArmClose(win *mygo.Window) {
-	if !pg.completionMenuOpen || pg.completionMenuClosePending {
+// completionMenuArmClose 离开弹层后延迟收起，避免移入面板途中误关。
+func (pg *mainPage) completionMenuArmClose(win *mygo.Window, st *completionMenuState) {
+	if !st.open || st.closePending {
 		return
 	}
-	pg.completionMenuClosePending = true
+	st.closePending = true
 	time.AfterFunc(300*time.Millisecond, func() {
 		win.Update(func() {
-			pg.completionMenuClosePending = false
-			if pg.completionWindow == win && !pg.completionMenuInside {
-				pg.completionMenuOpen = false
+			st.closePending = false
+			if pg.completionWindow == win && !st.inside {
+				st.open = false
 				win.Invalidate()
 			}
 		})
 	})
+}
+
+// completionDeleteMenu 在删除按钮悬停或聚焦时展开两个删除选项。
+func (pg *mainPage) completionDeleteMenu(c *ui.Context, p *d1Palette, anchor ui.Element, win *mygo.Window, item completionCardItem) {
+	st := &pg.completionDeleteMenuState
+	c.Key("completion-delete-menu")
+	pg.completionHoverMenu(c, p, anchor, st, win, completionMenuWidth, anchor.Hovered() || anchor.FocusVisible() || anchor.Pressed(), func() {
+		pg.d1MenuIconItem(c, p, "trash", "删除任务", p.fg, func() {
+			st.open = false
+			win.Close()
+			pg.deleteCompletionTask(item, false)
+		})
+		pg.d1MenuIconItem(c, p, "trash", "删除任务和文件", p.bad, func() {
+			st.open = false
+			win.Close()
+			pg.deleteCompletionTask(item, true)
+		})
+	})
+}
+
+// completionCutControl 是“剪切文件”图标文字按钮：点击剪切文件，悬停或键盘
+// 聚焦时展开“复制文件”选项，弹层与按钮同宽。
+func (pg *mainPage) completionCutControl(c *ui.Context, p *d1Palette, win *mygo.Window, item completionCardItem) {
+	cut := d1Button(c, p, "剪切文件", "scissors").Grow(1).Shrink(1).Basis(0).OnClick(func() {
+		win.Close()
+		pg.copyCompletionFile(item, true)
+	})
+	st := &pg.completionCutMenuState
+	c.Key("completion-cut-menu")
+	pg.completionHoverMenu(c, p, cut, st, win, cut.LayoutBounds().W, cut.Hovered() || cut.FocusVisible(), func() {
+		pg.d1MenuIconItem(c, p, "copy", "复制文件", p.fg, func() {
+			st.open = false
+			win.Close()
+			pg.copyCompletionFile(item, false)
+		})
+	})
+}
+
+// copyCompletionFile 把完成文件放入剪贴板供粘贴；cut 为真时按剪切语义写入，
+// 粘贴时移动文件，否则粘贴复制文件。
+func (pg *mainPage) copyCompletionFile(item completionCardItem, cut bool) {
+	if _, err := os.Stat(item.path); err != nil {
+		pg.flash("文件已失效，请重新下载")
+		return
+	}
+	data, err := fileClipboardData(item.path, cut)
+	if err == nil {
+		err = mygo.Clipboard.Write(data)
+	}
+	if err != nil {
+		if cut {
+			pg.flash("无法剪切文件到剪贴板：%s", err.Error())
+		} else {
+			pg.flash("无法复制文件到剪贴板：%s", err.Error())
+		}
+		return
+	}
+	if cut {
+		pg.flash("已剪切文件到剪贴板")
+	} else {
+		pg.flash("已复制文件到剪贴板")
+	}
 }
 
 // deleteCompletionTask 删除完成卡片对应的任务；withFiles 为真时把下载文件

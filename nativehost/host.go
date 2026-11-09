@@ -60,6 +60,11 @@ type message struct {
 	ID              string            `json:"id,omitempty"`
 	Folder          bool              `json:"folder,omitempty"`
 	Before          string            `json:"before,omitempty"`
+	JobID           string            `json:"jobId,omitempty"`
+	OK              bool              `json:"ok,omitempty"`
+	FinalURL        string            `json:"finalUrl,omitempty"`
+	Status          int               `json:"status,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
 }
 
 func Run() {
@@ -93,12 +98,22 @@ func serveNative(input io.Reader, output io.Writer, client *http.Client, address
 		defer outputMu.Unlock()
 		return writeMessage(output, reply)
 	}
+	// 长轮询桌面端的“重新请求原链接”任务并推送给浏览器：桌面端无法主动
+	// 连接扩展，只能借原生主机转交。
+	var closed = make(chan struct{})
+	defer close(closed)
+	go pollBrowserJobs(&http.Client{Timeout: 40 * time.Second}, address, func(job map[string]any) error { return writeReply(job) }, closed)
 	for {
 		msg, err := readMessage(input)
 		if err != nil {
 			return err
 		}
 		refreshLanguage()
+		if msg.Type == "browserJobResult" {
+			// 浏览器回传的重放结果无需回包，直接转交桌面端。
+			go forwardBrowserJobResult(client, address, msg)
+			continue
+		}
 		if msg.Type == "ping" {
 			if err := writeReply(handleMessage(client, "", "", msg, hostVersion)); err != nil {
 				return err
@@ -182,7 +197,7 @@ func handleMessage(client *http.Client, base, token string, msg message, hostVer
 func handle(client *http.Client, base, token string, msg message, hostVersion string) map[string]any {
 	switch msg.Type {
 	case "ping":
-		return map[string]any{"ok": true, "app": "opendl-host", "version": hostVersion, "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay", "file-size-probe"}, "siteRules": loadSiteRules()}
+		return map[string]any{"ok": true, "app": "opendl-host", "version": hostVersion, "capabilities": []string{"scheduled-queue", "idempotent-submission", "site-rules", "media-hls", "media-dash", "media-quality", "media-audio-language", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay", "file-size-probe", "browser-link-replay"}, "siteRules": loadSiteRules()}
 	case "desktopStatus":
 		info, err := desktopCapabilities(client, base, token, nil)
 		if err != nil {
@@ -471,6 +486,100 @@ func desktopCapabilities(client *http.Client, base, token string, required []str
 		}
 	}
 	return info, nil
+}
+
+// errBrowserJobsUnsupported means the desktop has no link-replay interface;
+// polling stops until the browser reconnects to a newer desktop.
+var errBrowserJobsUnsupported = errors.New("browser link-replay jobs unsupported")
+
+// browserJob is one desktop link-replay job as the host forwards it.
+type browserJob struct {
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	PageURL string `json:"pageUrl,omitempty"`
+}
+
+// pollBrowserJobs long-polls the desktop for link-replay jobs and hands each
+// to the browser; a job asks the extension to re-request a link in its login
+// state. Polling stops when the desktop lacks the interface or the host
+// disconnects.
+func pollBrowserJobs(client *http.Client, address func() (string, string), push func(map[string]any) error, closed <-chan struct{}) {
+	for {
+		select {
+		case <-closed:
+			return
+		default:
+		}
+		base, token := address()
+		jobs, err := fetchBrowserJobs(client, base, token)
+		if err != nil {
+			if errors.Is(err, errBrowserJobsUnsupported) {
+				return
+			}
+			select {
+			case <-closed:
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
+		for _, job := range jobs {
+			if err := push(map[string]any{"type": "browserJob", "jobId": job.ID, "url": job.URL, "pageUrl": job.PageURL}); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// fetchBrowserJobs long-polls the desktop until a job arrives or the wait
+// expires; an empty list means no job this round.
+func fetchBrowserJobs(client *http.Client, base, token string) ([]browserJob, error) {
+	req, err := http.NewRequest(http.MethodGet, base+"/api/browser-jobs", nil)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("X-OpenDL-Token", token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, errBrowserJobsUnsupported
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf(i18n.T("桌面端返回 HTTP %d"), resp.StatusCode)
+	}
+	var page struct {
+		Jobs []browserJob `json:"jobs"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&page); err != nil {
+		return nil, err
+	}
+	return page.Jobs, nil
+}
+
+// forwardBrowserJobResult reports what the browser actually sent for one
+// link-replay job back to the desktop.
+func forwardBrowserJobResult(client *http.Client, address func() (string, string), msg message) {
+	base, token := address()
+	payload := map[string]any{"jobId": msg.JobID, "ok": msg.OK, "finalUrl": msg.FinalURL, "status": msg.Status, "headers": msg.Headers, "reason": msg.Reason}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest(http.MethodPost, base+"/api/browser-job-result", bytes.NewReader(body))
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("X-OpenDL-Token", token)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 // readMessage reads one 4-byte little-endian length framed JSON message.

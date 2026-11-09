@@ -31,58 +31,59 @@ const maxTaskConcurrency = 64
 const maxFileTypes = 64
 
 type appPreferences struct {
-	Shortcuts             map[string]string          `json:"shortcuts,omitempty"`
-	MediaMuxProgram       string                     `json:"media_mux_program,omitempty"`
-	SiteRulesURL          string                     `json:"site_rules_url,omitempty"`
-	UserAgent             string                     `json:"user_agent,omitempty"`
-	WindowsAuth           []download.WindowsAuthSite `json:"windows_auth,omitempty"`
-	Updates               appupdate.Config           `json:"updates,omitempty"`
-	Language              string                     `json:"language,omitempty"`
-	AccentColor           string                     `json:"accent_color,omitempty"`
-	Directory             string                     `json:"directory"`
-	Connections           int                        `json:"connections"`
-	TaskConcurrency       int                        `json:"task_concurrency,omitempty"`
-	MaxConnections        int                        `json:"max_connections"`
-	AllowUnverifiedResume bool                       `json:"allow_unverified_resume,omitempty"`
-	Clipboard             bool                       `json:"clipboard"` // Retain the legacy key when loading and exporting settings.
-	DragFileAction        string                     `json:"drag_file_action,omitempty"`
-	FileExistsAction      string                     `json:"file_exists_action,omitempty"`
-	AutoStart             *bool                      `json:"auto_start,omitempty"`
-	MinTrayStart          bool                       `json:"min_tray_start"`
-	MinTrayClose          bool                       `json:"min_tray_close"`
-	NotifyComplete        bool                       `json:"notify_complete"`
-	NotifyApp             bool                       `json:"notify_app"`
-	FinishAction          string                     `json:"finish_action,omitempty"`
-	FinishDays            []int                      `json:"finish_days,omitempty"`
-	FinishProgram         string                     `json:"finish_program,omitempty"`
-	FinishArgs            string                     `json:"finish_args,omitempty"`
-	ScanProgram           string                     `json:"scan_program,omitempty"`
-	ScanArgs              string                     `json:"scan_args,omitempty"`
-	RateMBps              float64                    `json:"rate_mbps"`
-	QuotaPeriod           string                     `json:"quota_period,omitempty"`
-	QuotaMB               int                        `json:"quota_mb,omitempty"`
-	NightOn               bool                       `json:"night_on"`
-	NightAt               string                     `json:"night_at"`
-	NightStop             string                     `json:"night_stop,omitempty"`
-	NightDays             []int                      `json:"night_days,omitempty"`
-	SettingsSidebarWidth  float32                    `json:"settings_sidebar_width"`
-	Proxy                 download.ProxyConfig       `json:"proxy,omitempty"`
-	ProxySecret           string                     `json:"proxy_secret,omitempty"`
-	SiteLoginsSecret      string                     `json:"site_logins_secret,omitempty"`
-	CategoryDirs          map[string]string          `json:"category_dirs,omitempty"`
-	CategoryExts          map[string][]string        `json:"category_exts,omitempty"`
-	CustomCategories      []customCategorySpec       `json:"custom_categories,omitempty"`
-	SiteConnections       []siteConnSpec             `json:"site_connections,omitempty"`
-	MainQueueLimit        int                        `json:"main_queue_limit,omitempty"`
-	NightQueueLimit       int                        `json:"night_queue_limit,omitempty"`
-	MainQueueRate         int                        `json:"main_queue_rate,omitempty"`
-	NightQueueRate        int                        `json:"night_queue_rate,omitempty"`
-	CustomQueues          []customQueueSpec          `json:"custom_queues,omitempty"`
-	QueueSeq              int                        `json:"queue_seq,omitempty"`
-	SortDesc              bool                       `json:"sort_desc,omitempty"`
-	TaskSortBy            string                     `json:"task_sort_by,omitempty"`
-	ManualTaskSort        bool                       `json:"manual_task_sort,omitempty"`
-	ManualTaskOrder       []string                   `json:"manual_task_order,omitempty"`
+	Shortcuts               map[string]string          `json:"shortcuts,omitempty"`
+	MediaMuxProgram         string                     `json:"media_mux_program,omitempty"`
+	SiteRulesURL            string                     `json:"site_rules_url,omitempty"`
+	UserAgent               string                     `json:"user_agent,omitempty"`
+	WindowsAuth             []download.WindowsAuthSite `json:"windows_auth,omitempty"`
+	Updates                 appupdate.Config           `json:"updates,omitempty"`
+	Language                string                     `json:"language,omitempty"`
+	AccentColor             string                     `json:"accent_color,omitempty"`
+	Directory               string                     `json:"directory"`
+	Connections             int                        `json:"connections"`
+	TaskConcurrency         int                        `json:"task_concurrency,omitempty"`
+	MaxConnections          int                        `json:"max_connections"`
+	AllowUnverifiedResume   bool                       `json:"allow_unverified_resume,omitempty"`
+	Clipboard               bool                       `json:"clipboard"` // Retain the legacy key when loading and exporting settings.
+	ClipboardDownloadPrompt bool                       `json:"clipboard_download_prompt,omitempty"`
+	DragFileAction          string                     `json:"drag_file_action,omitempty"`
+	FileExistsAction        string                     `json:"file_exists_action,omitempty"`
+	AutoStart               *bool                      `json:"auto_start,omitempty"`
+	MinTrayStart            bool                       `json:"min_tray_start"`
+	MinTrayClose            bool                       `json:"min_tray_close"`
+	NotifyComplete          bool                       `json:"notify_complete"`
+	NotifyApp               bool                       `json:"notify_app"`
+	FinishAction            string                     `json:"finish_action,omitempty"`
+	FinishDays              []int                      `json:"finish_days,omitempty"`
+	FinishProgram           string                     `json:"finish_program,omitempty"`
+	FinishArgs              string                     `json:"finish_args,omitempty"`
+	ScanProgram             string                     `json:"scan_program,omitempty"`
+	ScanArgs                string                     `json:"scan_args,omitempty"`
+	RateMBps                float64                    `json:"rate_mbps"`
+	QuotaPeriod             string                     `json:"quota_period,omitempty"`
+	QuotaMB                 int                        `json:"quota_mb,omitempty"`
+	NightOn                 bool                       `json:"night_on"`
+	NightAt                 string                     `json:"night_at"`
+	NightStop               string                     `json:"night_stop,omitempty"`
+	NightDays               []int                      `json:"night_days,omitempty"`
+	SettingsSidebarWidth    float32                    `json:"settings_sidebar_width"`
+	Proxy                   download.ProxyConfig       `json:"proxy,omitempty"`
+	ProxySecret             string                     `json:"proxy_secret,omitempty"`
+	SiteLoginsSecret        string                     `json:"site_logins_secret,omitempty"`
+	CategoryDirs            map[string]string          `json:"category_dirs,omitempty"`
+	CategoryExts            map[string][]string        `json:"category_exts,omitempty"`
+	CustomCategories        []customCategorySpec       `json:"custom_categories,omitempty"`
+	SiteConnections         []siteConnSpec             `json:"site_connections,omitempty"`
+	MainQueueLimit          int                        `json:"main_queue_limit,omitempty"`
+	NightQueueLimit         int                        `json:"night_queue_limit,omitempty"`
+	MainQueueRate           int                        `json:"main_queue_rate,omitempty"`
+	NightQueueRate          int                        `json:"night_queue_rate,omitempty"`
+	CustomQueues            []customQueueSpec          `json:"custom_queues,omitempty"`
+	QueueSeq                int                        `json:"queue_seq,omitempty"`
+	SortDesc                bool                       `json:"sort_desc,omitempty"`
+	TaskSortBy              string                     `json:"task_sort_by,omitempty"`
+	ManualTaskSort          bool                       `json:"manual_task_sort,omitempty"`
+	ManualTaskOrder         []string                   `json:"manual_task_order,omitempty"`
 }
 
 func defaultAppPreferences() appPreferences {
@@ -697,6 +698,9 @@ func (pg *mainPage) setMaxConnections(value int) {
 
 // setAutoStart 登记或移除登录启动项；注册状态由系统维护。
 func (pg *mainPage) setAutoStart(enabled bool) error {
+	if mygo.IsDev() {
+		return errors.New(tr("开发版不支持开机自动启动"))
+	}
 	if !mygo.App.IsReady() {
 		return errors.New(tr("开机自动启动需要桌面应用"))
 	}
@@ -705,7 +709,7 @@ func (pg *mainPage) setAutoStart(enabled bool) error {
 
 // autoStartEnabled 读取系统登记的登录启动状态，任务管理器禁用后如实反映。
 func autoStartEnabled() bool {
-	return mygo.App.IsReady() && mygo.App.OpenAtLogin()
+	return !mygo.IsDev() && mygo.App.IsReady() && mygo.App.OpenAtLogin()
 }
 
 // applyTrayPrefs 落实两个最小化到托盘选项：任一开启都需要托盘入口，全部

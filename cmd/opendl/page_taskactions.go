@@ -221,7 +221,7 @@ func (pg *mainPage) aboutDialog(c *ui.Context, p *d1Palette) {
 					ui.Row(c).FillWidth().Gap(8).Justify(ui.Center).Children(func() {
 						d1CopyControl(c, p, "about-copy-version", "复制版本", pg.copyFeedback(c, "version"), false, pg.svc != nil).OnClick(func() {
 							if pg.svc != nil {
-								pg.svc.WriteClipboard(d1AppVersion())
+								pg.writeClipboard(*pg.svc, d1AppVersion())
 								pg.markCopied("version")
 							}
 						})

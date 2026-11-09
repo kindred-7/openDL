@@ -15,7 +15,7 @@ arrow-down arrow-down-up arrow-up bell calendar check check-check chevron-down c
 circle-alert circle-check circle-dot circle-pause clipboard clock copy disc-3 download
 ellipsis external-link file file-archive film folder folder-open gauge globe grip-vertical hard-drive headphones house
 info layers link list minus moon package panel-bottom panel-left
-panel-right pause play plus rotate-cw rss search settings share-2
+panel-right pause play plus rotate-cw rss scissors search settings share-2
 sliders-horizontal square sun trash upload x zap list-filter layout-list columns-3 list-checks funnel orbit
 """.split()
 

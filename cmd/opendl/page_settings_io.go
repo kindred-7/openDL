@@ -80,6 +80,7 @@ func (pg *mainPage) importSettings() {
 	// A pending password-encryption job must not restore the old proxy after import.
 	pg.proxyJob++
 	pg.preferences = prefs
+	pg.syncClipboardPrompt()
 	pg.saveDir = prefs.Directory
 	pg.sortDesc = prefs.SortDesc
 	pg.nightOn, pg.nightAt, pg.nightStop = prefs.NightOn, prefs.NightAt, prefs.NightStop

@@ -242,9 +242,8 @@ type mainPage struct {
 	settingsWindow                      *settingsPage
 	completionWindow                    *mygo.Window
 	completionQueue                     []completionCardItem
-	completionMenuOpen                  bool
-	completionMenuInside                bool
-	completionMenuClosePending          bool
+	completionDeleteMenuState           completionMenuState
+	completionCutMenuState              completionMenuState
 	completionCardInside                bool
 	addWindow                           *mygo.Window
 	settingsSaveError                   string
@@ -352,9 +351,12 @@ type mainPage struct {
 	stopCheckedAt                                            string
 	schedulePaused                                           []string
 
-	limitOn     bool
-	fileMissing map[string]bool // 已完成任务的本地文件被清理；仅在界面线程读写
-	quotaWarned bool            // 流量配额提示去重；与 histMu 同步读写
+	limitOn             bool
+	clipboardPromptStop chan struct{}
+	clipboardLast       string
+	clipboardPrimed     bool
+	fileMissing         map[string]bool // 已完成任务的本地文件被清理；仅在界面线程读写
+	quotaWarned         bool            // 流量配额提示去重；与 histMu 同步读写
 
 	redrawMu      sync.Mutex
 	redrawLast    time.Time
@@ -556,6 +558,7 @@ func (pg *mainPage) startWindow() {
 		go pg.fileIconWatch()
 	}
 	go pg.fileStateWatch()
+	pg.syncClipboardPrompt()
 	go pg.trayStatusWatch()
 	go pg.nightWatch()
 	go pg.grabWatch()
@@ -2331,7 +2334,7 @@ func (pg *mainPage) logTab(c *ui.Context, p *d1Palette, r d1Row) {
 			if copyLog.Clicked() {
 				text := strings.Join(lines, "\n")
 				if pg.svc != nil {
-					pg.svc.WriteClipboard(text)
+					pg.writeClipboard(*pg.svc, text)
 					pg.markCopied(copyKey)
 				}
 			}
@@ -2992,6 +2995,10 @@ func (pg *mainPage) toggleRow(r d1Row) {
 func (pg *mainPage) redownload(r d1Row) {
 	var id string
 	if r.snap.ID != "" {
+		if pg.mgr.RedownloadNeedsLogin(r.id) {
+			pg.redownloadWithBrowser(r)
+			return
+		}
 		var err error
 		id, err = pg.mgr.Redownload(r.id)
 		if err != nil {
@@ -3008,14 +3015,69 @@ func (pg *mainPage) redownload(r d1Row) {
 	} else {
 		return
 	}
+	pg.finishRedownload(r.id, id)
+}
+
+// finishRedownload 记录重新下载日志并跟随新建任务。
+func (pg *mainPage) finishRedownload(oldID, newID string) {
 	pg.histMu.Lock()
-	pg.logs[id] = append(pg.logs[id], time.Now().Format("15:04:05")+tr("  重新下载"))
+	pg.logs[newID] = append(pg.logs[newID], time.Now().Format("15:04:05")+tr("  重新下载"))
 	pg.histMu.Unlock()
-	if pg.checked[r.id] {
-		delete(pg.checked, r.id)
-		pg.checked[id] = true
+	if pg.checked[oldID] {
+		delete(pg.checked, oldID)
+		pg.checked[newID] = true
 	}
-	pg.sel = id
+	pg.sel = newID
+}
+
+// redownloadWithBrowser 重新下载缺少登录信息的恢复任务：先让浏览器扩展在登录
+// 态下重新请求原链接，取回浏览器实际发出的凭据后重建任务；凭据不落盘。
+func (pg *mainPage) redownloadWithBrowser(r d1Row) {
+	if pg.win == nil || pg.mgr == nil {
+		return
+	}
+	if pg.apiServer == nil {
+		pg.flash("无法通过浏览器重新请求原链接；请先更新下载信息")
+		return
+	}
+	req, ok := pg.mgr.Request(r.id)
+	if !ok {
+		return
+	}
+	result, err := pg.apiServer.Replay.Request(req.URL, req.PageURL)
+	if err != nil {
+		pg.flash(err.Error())
+		return
+	}
+	pg.flash("正在通过浏览器重新请求原链接…")
+	win := pg.win
+	go func() {
+		var res api.ReplayResult
+		timedOut := false
+		select {
+		case res = <-result:
+		case <-time.After(45 * time.Second):
+			timedOut = true
+		}
+		win.Update(func() {
+			switch {
+			case timedOut:
+				pg.flash("重新请求原链接超时，请稍后重试")
+			case !res.OK:
+				pg.flash("无法重新请求原链接：%s", res.Reason)
+			case res.Status == 401 || res.Status == 403:
+				pg.flash("浏览器登录状态已失效，请在浏览器中重新登录后重试")
+			default:
+				newID, err := pg.mgr.RedownloadWithLogin(r.id, res.FinalURL, res.Headers)
+				if err != nil {
+					pg.flash(err.Error())
+					return
+				}
+				pg.finishRedownload(r.id, newID)
+				pg.flash("已刷新登录信息，开始重新下载")
+			}
+		})
+	}()
 }
 
 // redownloadSelection 批量重新下载所选任务：逐个重建，失败的静默跳过（单行
@@ -3289,7 +3351,7 @@ func (pg *mainPage) copyRowText(text string) {
 	if pg.svc == nil || text == "" {
 		return
 	}
-	pg.svc.WriteClipboard(text)
+	pg.writeClipboard(*pg.svc, text)
 	pg.markCopied("url")
 }
 

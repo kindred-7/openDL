@@ -125,7 +125,7 @@ func (d *browserDownloadWindow) view(c *ui.Context) {
 						button.Tooltip(tr("已复制下载链接"))
 					}
 					button.OnClick(func() {
-						svc.WriteClipboard(url)
+						d.owner.writeClipboard(svc, url)
 						d.linkCopiedUntil = time.Now().Add(1600 * time.Millisecond)
 						svc.Invalidate()
 					})

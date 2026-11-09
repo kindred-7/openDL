@@ -228,6 +228,69 @@ function captureCoremailRequest(details) {
   rememberCoremailRequest(details, headers);
 }
 
+
+// Link replay: the desktop asks the browser to re-request a link in its
+// login state and report the request it actually sent, so a download whose
+// credentials were never persisted can start again. Credentials travel in
+// memory only. Partitioned cookies and other containers than the default
+// one stay out of reach here; the browser sends what it would send.
+const replayRequestHeaders = ["Cookie", "Referer", "User-Agent", "Accept", "Accept-Language"];
+
+async function handleBrowserJob(port, msg) {
+  const result = await replayBrowserLink(String(msg.url || ""));
+  try {
+    port.postMessage({ type: "browserJobResult", jobId: msg.jobId, ...result });
+  } catch {}
+}
+
+async function replayBrowserLink(url) {
+  if (!/^https?:/i.test(url)) return { ok: false, reason: localize("不支持的下载地址") };
+  const requests = [];
+  const capture = (details) => {
+    if (details.method === "GET") requests.push({ url: details.url, headers: details.requestHeaders || [] });
+  };
+  const filter = { urls: ["<all_urls>"] };
+  try {
+    chrome.webRequest.onSendHeaders.addListener(capture, filter, ["requestHeaders", "extraHeaders"]);
+  } catch {
+    chrome.webRequest.onSendHeaders.addListener(capture, filter, ["requestHeaders"]);
+  }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15000);
+    let response;
+    try {
+      // A one-byte range keeps the replay from transferring the file; the
+      // browser still sends the request with the current login state.
+      response = await fetch(url, {
+        method: "GET",
+        headers: { Range: "bytes=0-0" },
+        credentials: "include",
+        redirect: "follow",
+        cache: "no-store",
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    try { if (response.body) await response.body.cancel(); } catch {}
+    const finalUrl = response.url || url;
+    const sent = requests.filter((entry) => entry.url === finalUrl).pop() || requests.pop() || { url: finalUrl, headers: [] };
+    const headers = {};
+    for (const name of replayRequestHeaders) {
+      const value = sent.headers.find((header) => header.name.toLowerCase() === name.toLowerCase())?.value;
+      if (typeof value === "string" && value.length <= (name === "Cookie" ? 8192 : 4096) && /^[\x20-\x7e]*$/.test(value)) {
+        headers[name] = value;
+      }
+    }
+    return { ok: true, finalUrl, status: response.status, headers };
+  } catch (error) {
+    return { ok: false, reason: String(error) };
+  } finally {
+    chrome.webRequest.onSendHeaders.removeListener(capture);
+  }
+}
+
 function rememberCoremailRequest(details, headers) {
   const { requestId, tabId, url } = details;
   const request = { url, tabId, headers, ready: false, size: 0 };
@@ -638,6 +701,10 @@ function connect() {
     }
     port = activePort;
     activePort.onMessage.addListener((msg) => {
+      if (msg && msg.type === "browserJob" && msg.jobId) {
+        void handleBrowserJob(activePort, msg);
+        return;
+      }
       if (msg && !msg.ok) {
         const messages = {
           update_in_progress: "应用正在准备更新，请稍后再操作",

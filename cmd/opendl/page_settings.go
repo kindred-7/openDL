@@ -146,6 +146,7 @@ var settingsEntries = []settingsEntry{
 	{"language", "常规", "语言", "选择应用显示语言，立即生效。", "语言 language English 中文"},
 	{"appearance", "界面", "外观", "选择主题或跟随系统。", "主题 深色 浅色 跟随系统 颜色 Blender 浅色 Blender 深色"},
 	{"accent", "界面", "主题色", "选择全局强调色，适配亮色和深色主题。", "颜色 主题色 色盘 强调色 radix color accent"},
+	{"clipboard", "下载", "复制链接时提示下载", "在其他应用中复制下载链接时打开添加下载窗口。", "剪贴板 监听 链接 clipboard"},
 	{"drag-file-action", "下载", "拖出文件时", "将已完成的文件拖到窗口外时使用的操作。移动后原路径可能失效。", "拖拽 拖放 文件 复制 移动"},
 	{"file-exists", "下载", "文件已存在时", "下载目录已有同名文件时，覆盖原文件或创建副本。", "重名 覆盖 副本 已存在 同名 duplicate overwrite"},
 	{"notify-system", "常规", "系统通知", "任务下载完成时显示系统通知。", "通知 提醒 系统 完成 声音 notify system"},
@@ -201,7 +202,7 @@ var settingsGroups = []settingsGroup{
 	{"面板", "界面", []string{"detail", "reset-layout"}},
 	{"键盘快捷键", "界面", []string{"shortcuts"}},
 
-	{"下载", "下载", []string{"directory", "drag-file-action", "file-exists", "task-concurrency", "connections", "max-connections", "unverified-resume"}},
+	{"下载", "下载", []string{"directory", "clipboard", "drag-file-action", "file-exists", "task-concurrency", "connections", "max-connections", "unverified-resume"}},
 	{"速度与流量", "下载", []string{"speed", "traffic-quota"}},
 	{"媒体合并程序", "下载", []string{"media-mux"}},
 	{"分类保存目录", "下载", []string{"category-dirs"}},
@@ -1167,6 +1168,10 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 	if (entry.id == "finish-program" || entry.id == "finish-args") && s.owner.preferences.FinishAction != "run" && strings.TrimSpace(s.query) == "" {
 		return
 	}
+	devAutoStart := entry.id == "autostart" && mygo.IsDev()
+	if devAutoStart {
+		entry.description = "开发版不支持开机自动启动"
+	}
 	ui.Column(c).FillWidth().Gap(8).Children(func() {
 		if !hideTitle {
 			ui.Row(c).FillWidth().Gap(12).AlignItems(ui.Center).Children(func() {
@@ -1204,6 +1209,12 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "proxy":
 					d1Choice(c, p, "代理模式", &s.proxyMode, []d1Option{{value: "environment", label: "环境代理"}, {value: "system", label: "系统代理"}, {value: "direct", label: "不使用代理"}, {value: "manual", label: "手动代理"}}).
 						Width(settingsControlWidth).Shrink(0).Tooltip(tr("代理设置用于后续网络请求，已传输的响应继续使用原连接")).OnChange(s.proxyEdited)
+				case "clipboard":
+					settingsSwitch(c, p, entry.title, &s.owner.preferences.ClipboardDownloadPrompt).OnChange(func() {
+						s.owner.syncClipboardPrompt()
+						s.owner.saveAppPreferences()
+						s.changed()
+					})
 				case "unverified-resume":
 					settingsSwitch(c, p, "允许未校验续传", &s.owner.preferences.AllowUnverifiedResume).OnChange(func() {
 						s.owner.mgr.SetAllowUnverifiedResume(s.owner.preferences.AllowUnverifiedResume)
@@ -1215,7 +1226,7 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 				case "notify-app":
 					settingsSwitch(c, p, "应用通知", &s.owner.preferences.NotifyApp).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "autostart":
-					settingsSwitch(c, p, "开机自动启动", &s.autoStart).OnChange(func() {
+					settingsSwitch(c, p, "开机自动启动", &s.autoStart).Disabled(devAutoStart).OnChange(func() {
 						s.autostartError = ""
 						if err := s.owner.setAutoStart(s.autoStart); err != nil {
 							s.autoStart = !s.autoStart

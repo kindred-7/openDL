@@ -378,12 +378,56 @@ func downloadDir() string {
 	return filepath.Join(home, "open_dl")
 }
 
+// initializeAutoStart applies the installer's choice and reports whether the default needs saving.
+func initializeAutoStart(preferences *appPreferences) bool {
+	if mygo.IsDev() {
+		if err := mygo.App.SetOpenAtLogin(false); err != nil {
+			log.Printf("清理开发版开机启动项: %v", err)
+		}
+		return false
+	}
+
+	executable, exeErr := os.Executable()
+	if exeErr != nil {
+		log.Printf("读取程序路径: %v", exeErr)
+	}
+	if enabled, present, err := installerconfig.ReadAutoStart(executable); err != nil {
+		log.Printf("读取安装器启动设置: %v", err)
+	} else if present {
+		if err := mygo.App.SetOpenAtLogin(enabled); err != nil {
+			log.Printf("应用安装器启动设置: %v", err)
+		} else {
+			preferences.AutoStart = &enabled
+			if err := writeAppPreferences(*preferences); err != nil {
+				log.Printf("保存安装器启动设置: %v", err)
+			} else if err := installerconfig.ClearAutoStart(); err != nil {
+				log.Printf("清理安装器启动设置: %v", err)
+			}
+		}
+	}
+	// 开机自启动默认开启。登记过后，由设置开关与系统维护状态。
+	if preferences.AutoStart != nil {
+		return false
+	}
+	if err := mygo.App.SetOpenAtLogin(true); err != nil {
+		log.Printf("无法启用开机自动启动: %v", err)
+		return false
+	}
+	enabled := true
+	preferences.AutoStart = &enabled
+	return true
+}
+
 func main() {
 	if nativehost.IsBrowserInvocation(os.Args[1:]) {
 		nativehost.RunWithVersion(mygo.App.Version())
 		return
 	}
 	if runUpdateHelper() {
+		return
+	}
+	// 旧版留下的登录启动项可能仍会调用开发版。
+	if mygo.IsDev() && mygo.App.WasOpenedAtLogin() {
 		return
 	}
 	// 诊断日志：标准 log 输出滚动写入日志文件，stderr 输出保持不变。
@@ -515,37 +559,7 @@ func main() {
 	themeMode := loadThemeMode()
 	var mainWindowPage *mainPage
 	mygo.App.WhenReady(func() {
-		// Apply the installer's explicit choice once, without replacing other settings.
-		executable, exeErr := os.Executable()
-		if exeErr != nil {
-			log.Printf("读取程序路径: %v", exeErr)
-		}
-		if enabled, present, err := installerconfig.ReadAutoStart(executable); err != nil {
-			log.Printf("读取安装器启动设置: %v", err)
-		} else if present {
-			if err := mygo.App.SetOpenAtLogin(enabled); err != nil {
-				log.Printf("应用安装器启动设置: %v", err)
-			} else {
-				preferences.AutoStart = &enabled
-				if err := writeAppPreferences(preferences); err != nil {
-					log.Printf("保存安装器启动设置: %v", err)
-				} else if err := installerconfig.ClearAutoStart(); err != nil {
-					log.Printf("清理安装器启动设置: %v", err)
-				}
-			}
-		}
-		// 开机自启动默认开启：从未在设置中选择过时登记一次并记录，之后由
-		// 设置开关与系统状态维护，任务管理器等外部禁用不覆盖。
-		autoStartRecorded := false
-		if preferences.AutoStart == nil {
-			if err := mygo.App.SetOpenAtLogin(true); err != nil {
-				log.Printf("无法启用开机自动启动: %v", err)
-			} else {
-				chosen := true
-				preferences.AutoStart = &chosen
-				autoStartRecorded = true
-			}
-		}
+		autoStartRecorded := initializeAutoStart(&preferences)
 		applyNativeThemeMode(themeMode)
 		dark := mygo.Theme.IsDark()
 		// 启动时最小化到托盘：窗口以隐藏状态创建，由托盘入口唤回。

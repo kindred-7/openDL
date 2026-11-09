@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"openDL/download"
 	"openDL/pathrec"
@@ -44,6 +45,7 @@ type Server struct {
 	Prompt      func(download.Request) bool
 	OpenTask    func(string, bool) error
 	InstallExit func(string) bool
+	Replay      LinkReplay
 	promptMu    sync.Mutex
 	promptIDs   map[string][32]byte
 	promptOrder []string // insertion order of promptIDs, drained oldest-first
@@ -233,7 +235,23 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, map[string]bool{"ok": true})
 	case r.Method == http.MethodGet && r.URL.Path == "/api/ping":
-		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay", "file-size-probe"}})
+		writeJSON(w, map[string]any{"ok": true, "theme": s.theme.Load(), "capabilities": []string{"scheduled-queue", "idempotent-submission", "media-hls", "media-dash", "media-quality", "media-audio-language", "finish-live", "task-control", "download-prompt", "browser-tasks", "browser-tasks-v2", "browser-attachment-replay", "file-size-probe", "browser-link-replay"}})
+	case r.Method == http.MethodGet && r.URL.Path == "/api/browser-jobs":
+		// 浏览器主机长轮询“重新请求原链接”任务；桌面端不主动连接浏览器。
+		job, ok := s.Replay.Wait(25 * time.Second)
+		jobs := make([]ReplayJob, 0, 1)
+		if ok {
+			jobs = append(jobs, job)
+		}
+		writeJSON(w, map[string]any{"jobs": jobs})
+	case r.Method == http.MethodPost && r.URL.Path == "/api/browser-job-result":
+		var result ReplayResult
+		if err := readJSON(w, r, &result, 32<<10); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", i18n.T("下载请求格式无效"))
+			return
+		}
+		s.Replay.Complete(result)
+		writeJSON(w, map[string]bool{"ok": true})
 	case r.Method == http.MethodPost && (r.URL.Path == "/api/download" || r.URL.Path == "/api/prompt" || r.URL.Path == "/api/probe"):
 		var req download.Request
 		if err := readJSON(w, r, &req, 1<<20); err != nil {

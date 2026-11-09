@@ -22,6 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/net/http/httpguts"
+
 	"openDL/pathrec"
 	"openDL/signature"
 
@@ -1032,24 +1034,79 @@ func (m *Manager) Redownload(id string) (string, error) {
 			m.mu.Unlock()
 			return "", fmt.Errorf(i18n.T("登录信息未保存，请先更新下载信息；已完成任务请重新添加下载"))
 		}
-		req := taskRequest(t)
-		if t.night.Load() {
-			t.metaMu.Lock()
-			if t.filePath != "" {
-				req.Name = filepath.Base(t.filePath)
-			}
-			t.metaMu.Unlock()
-		}
-		req.Queue = ""
-		t.stop()
-		t.removed.Store(true)
-		m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
-		m.mu.Unlock()
-		go m.cleanupRemovedTask(t)
-		return m.Add(req), nil
+		return m.redownloadLocked(i, t, taskRequest(t)), nil
 	}
 	m.mu.Unlock()
 	return "", fmt.Errorf(i18n.T("任务不存在"))
+}
+
+// RedownloadWithLogin replaces a task like Redownload after the caller
+// re-obtained the address and headers by re-requesting the original link in
+// the browser's login state. The restored-credentials guard does not apply:
+// the caller supplies fresh credentials, which stay in memory only.
+func (m *Manager) RedownloadWithLogin(id, address string, headers map[string]string) (string, error) {
+	address = strings.TrimSpace(address)
+	u, err := url.Parse(address)
+	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return "", fmt.Errorf(i18n.T("请输入有效的 HTTP 或 HTTPS 下载地址"))
+	}
+	for name, value := range headers {
+		if !httpguts.ValidHeaderFieldName(name) || !httpguts.ValidHeaderFieldValue(value) {
+			return "", fmt.Errorf(i18n.T("请求头格式无效：%s"), name)
+		}
+	}
+	m.mu.Lock()
+	if m.updateStarting {
+		m.mu.Unlock()
+		return "", ErrUpdateInProgress
+	}
+	for i, t := range m.tasks {
+		if t.id != id {
+			continue
+		}
+		if t.editing || t.verifying.Load() {
+			m.mu.Unlock()
+			return "", fmt.Errorf(i18n.T("任务正在更新或校验，请稍后重试"))
+		}
+		req := taskRequest(t)
+		req.URL, req.Headers = address, cloneHeaders(headers)
+		return m.redownloadLocked(i, t, req), nil
+	}
+	m.mu.Unlock()
+	return "", fmt.Errorf(i18n.T("任务不存在"))
+}
+
+// RedownloadNeedsLogin reports whether Redownload would refuse the task for
+// credentials missing from the credential-free journal and no integrated
+// authentication, so callers may refresh login information first.
+func (m *Manager) RedownloadNeedsLogin(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, t := range m.tasks {
+		if t.id == id {
+			return t.needsAuth.Load() && !m.canSystemAuthenticateLocked(t)
+		}
+	}
+	return false
+}
+
+// redownloadLocked replaces one task with a new one built from req and
+// starts it; the caller holds m.mu and this method unlocks it.
+func (m *Manager) redownloadLocked(i int, t *Task, req Request) string {
+	if t.night.Load() {
+		t.metaMu.Lock()
+		if t.filePath != "" {
+			req.Name = filepath.Base(t.filePath)
+		}
+		t.metaMu.Unlock()
+	}
+	req.Queue = ""
+	t.stop()
+	t.removed.Store(true)
+	m.tasks = append(m.tasks[:i], m.tasks[i+1:]...)
+	m.mu.Unlock()
+	go m.cleanupRemovedTask(t)
+	return m.Add(req)
 }
 
 // Concurrency returns the maximum number of active tasks across all queues.
