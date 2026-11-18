@@ -1705,6 +1705,16 @@ func (m *Manager) download(t *Task) error {
 
 	total := resp.ContentLength
 	t.total.Store(total)
+	if singleResponseDownload(req.URL) || (resp.Request != nil && singleResponseDownload(resp.Request.URL)) {
+		// The first successful GET may consume the token. Keep its body and
+		// report a read failure directly so the task does not replay the GET.
+		err := m.downloadSingle(t, part, resp, cancelReq)
+		var readErr *responseReadError
+		if errors.As(err, &readErr) {
+			return readErr.err
+		}
+		return err
+	}
 	t.resumeSafe.Store(total >= 256<<10 && t.rangeSupport.Load() == 2 && (validator != "" || expected != ""))
 
 	// Single stream transfer; the multi-connection split below takes over
@@ -1733,9 +1743,8 @@ func (m *Manager) download(t *Task) error {
 	}
 	rangePermitted := t.rangeSupport.Load() != 1
 	if t.conns == -1 {
-		oneUse := singleResponseDownload(req.URL) || (resp.Request != nil && singleResponseDownload(resp.Request.URL))
-		rangePermitted = !oneUse && t.rangeSupport.Load() == 2
-		if !rangePermitted && !oneUse && t.rangeSupport.Load() == 0 && resp.Request != nil && resp.Request.URL != nil &&
+		rangePermitted = t.rangeSupport.Load() == 2
+		if !rangePermitted && t.rangeSupport.Load() == 0 && resp.Request != nil && resp.Request.URL != nil &&
 			total >= 256<<10 && validator != "" {
 			// 部分服务器支持范围请求但不发 Accept-Ranges：用 bytes=0-0 探测
 			// 确认 206 后进入分段；失败保持单流，行为与探测前一致。只对有

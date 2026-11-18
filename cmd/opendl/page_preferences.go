@@ -51,6 +51,7 @@ type appPreferences struct {
 	AutoStart               *bool                      `json:"auto_start,omitempty"`
 	MinTrayStart            bool                       `json:"min_tray_start"`
 	MinTrayClose            bool                       `json:"min_tray_close"`
+	ShowMainAfterAdd        bool                       `json:"show_main_after_add,omitempty"`
 	NotifyComplete          bool                       `json:"notify_complete"`
 	NotifyApp               bool                       `json:"notify_app"`
 	FinishAction            string                     `json:"finish_action,omitempty"`

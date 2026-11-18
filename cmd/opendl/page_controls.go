@@ -1191,7 +1191,7 @@ func (pg *mainPage) submitDownloads(start bool) {
 	pg.dlgError = ""
 	pg.extractJob++
 	pg.closeAddWindow()
-	if start && !pg.queueIsNight() {
+	if start && !pg.queueIsNight() && pg.preferences.ShowMainAfterAdd {
 		pg.showMainWindow()
 	}
 }

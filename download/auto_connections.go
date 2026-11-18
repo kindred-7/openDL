@@ -2,9 +2,7 @@ package download
 
 import (
 	"context"
-	"net/url"
 	"runtime"
-	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -19,10 +17,6 @@ type connectionRefusalError struct{ err error }
 
 func (e *connectionRefusalError) Error() string { return e.err.Error() }
 func (e *connectionRefusalError) Unwrap() error { return e.err }
-
-func singleResponseDownload(u *url.URL) bool {
-	return u != nil && strings.EqualFold(strings.TrimRight(u.Path, "/"), "/multiple-download") && u.Query().Get("token") != ""
-}
 
 // The size/CPU estimate is a resource ceiling, not a claim that all of those
 // connections improve throughput. Each task measures that independently.

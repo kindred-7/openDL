@@ -1183,6 +1183,8 @@
   "新版本未能启动，已恢复并重新打开原版本。": "The new version could not start; the previous version was restored and reopened.",
   "启动时最小化到托盘": "Minimize to tray at startup",
   "关闭时最小化到托盘": "Minimize to tray when closing",
+  "添加下载后显示主窗口": "Show main window after adding a download",
+  "添加并开始下载后，将主窗口显示到前台。": "Bring the main window to the foreground after adding and starting a download.",
   "无法设置托盘：": "Cannot configure the tray: ",
   "抓取项目没有新增链接": "Grab project added no new links",
   "抓取项目新增 %d 个任务": "Grab project added %d tasks",

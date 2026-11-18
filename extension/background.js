@@ -463,6 +463,9 @@ async function probePublicFileSize(url) {
 async function probeResourceFileSize(msg) {
   const url = normalizeDownloadURL(msg.url);
   if (!url || url.length > 4096 || !/^https?:\/\//i.test(url)) return undefined;
+  const target = new URL(url);
+  // The fallback GET can consume a download token before the task starts.
+  if (/^\/multiple-download\/*$/i.test(target.pathname) && target.searchParams.get("token")) return undefined;
   const key = JSON.stringify([msg.tabId, msg.pageUrl, url, msg.useBrowserCookies === true]);
   const cached = fileSizeLookups.get(key);
   if (cached && cached.expires > Date.now()) return cached.result;

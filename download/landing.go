@@ -32,6 +32,10 @@ func isHTMLFilename(name string) bool {
 	return strings.HasSuffix(lower, ".html") || strings.HasSuffix(lower, ".htm") || strings.HasSuffix(lower, ".xhtml")
 }
 
+func singleResponseDownload(u *url.URL) bool {
+	return u != nil && strings.EqualFold(strings.TrimRight(u.Path, "/"), "/multiple-download") && u.Query().Get("token") != ""
+}
+
 // resolveDownloadResponse follows declarative landing-page redirects using the
 // same request route and cross-origin header policy as ordinary HTTP redirects.
 func resolveDownloadResponse(request *http.Request, rejectHTML bool, send func(*http.Request) (*http.Response, error)) (*http.Response, error) {

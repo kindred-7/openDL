@@ -199,7 +199,9 @@ func (d *browserDownloadWindow) submit() {
 			}
 			d.owner.sel = id
 			win.Close()
-			d.owner.showMainWindow()
+			if d.owner.preferences.ShowMainAfterAdd {
+				d.owner.showMainWindow()
+			}
 		})
 	}()
 }

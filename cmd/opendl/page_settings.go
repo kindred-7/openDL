@@ -154,6 +154,7 @@ var settingsEntries = []settingsEntry{
 	{"autostart", "常规", "开机自动启动", "登录系统后自动启动 OpenDL。", "开机 自动 启动 登录 autostart"},
 	{"min-tray-start", "常规", "启动时最小化到托盘", "启动后主窗口不显示，驻留托盘，可从托盘重新打开。", "托盘 启动 最小化 隐藏 驻留 tray start"},
 	{"min-tray-close", "常规", "关闭时最小化到托盘", "关闭主窗口后驻留托盘继续运行，可从托盘重新打开或退出。", "托盘 关闭 最小化 后台 运行 驻留 tray close background"},
+	{"show-main-after-add", "常规", "添加下载后显示主窗口", "添加并开始下载后，将主窗口显示到前台。", "添加 下载 主窗口 显示 前台 后台 弹出 show main window download"},
 	{"directory", "下载", "默认保存位置", "新下载默认保存到此文件夹，已有任务不受影响。", "目录 路径 文件夹 保存"},
 	{"task-concurrency", "下载", "同时下载任务数", "所有队列同时下载的任务上限；调低时不会中断正在下载的任务。", "并发 任务 队列 同时 下载 上限"},
 	{"connections", "下载", "默认连接数", "新任务默认使用的连接数，可在添加下载时单独调整。", "分段 连接 数量"},
@@ -194,7 +195,7 @@ type settingsGroup struct {
 
 // settingsGroups 是设置卡片的展示顺序。
 var settingsGroups = []settingsGroup{
-	{"常规", "常规", []string{"language", "notify-system", "notify-app", "autostart", "min-tray-start", "min-tray-close"}},
+	{"常规", "常规", []string{"language", "notify-system", "notify-app", "autostart", "min-tray-start", "min-tray-close", "show-main-after-add"}},
 	{"应用更新", "常规", []string{"updates"}},
 
 	{"外观", "界面", []string{"appearance"}},
@@ -1225,6 +1226,8 @@ func (s *settingsPage) settingRow(c *ui.Context, p *d1Palette, entry settingsEnt
 					settingsSwitch(c, p, "系统通知", &s.owner.preferences.NotifyComplete).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "notify-app":
 					settingsSwitch(c, p, "应用通知", &s.owner.preferences.NotifyApp).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
+				case "show-main-after-add":
+					settingsSwitch(c, p, entry.title, &s.owner.preferences.ShowMainAfterAdd).OnChange(func() { s.owner.saveAppPreferences(); s.changed() })
 				case "autostart":
 					settingsSwitch(c, p, "开机自动启动", &s.autoStart).Disabled(devAutoStart).OnChange(func() {
 						s.autostartError = ""

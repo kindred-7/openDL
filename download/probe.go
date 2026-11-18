@@ -16,15 +16,15 @@ func (m *Manager) ProbeFileSize(ctx context.Context, order Request) *int64 {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodHead, order.URL, nil)
+	if err != nil || singleResponseDownload(request.URL) {
+		return nil
+	}
 	order.Headers = cloneHeaders(order.Headers)
 	m.applySiteLogin(&order)
 	m.mu.Lock()
 	headers := downloadHeaders(order.Headers, m.userAgent)
 	m.mu.Unlock()
-	request, err := http.NewRequestWithContext(ctx, http.MethodHead, order.URL, nil)
-	if err != nil {
-		return nil
-	}
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}

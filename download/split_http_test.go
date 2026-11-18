@@ -2,6 +2,7 @@ package download
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,73 @@ import (
 	"testing"
 	"time"
 )
+
+func TestTokenDownloadUsesFirstResponse(t *testing.T) {
+	data := bytes.Repeat([]byte("0123456789abcdef"), (1<<20)/16)
+	for _, tc := range []struct {
+		name        string
+		connections int
+		interrupted bool
+	}{
+		{name: "fixed", connections: 8},
+		{name: "automatic", connections: -1},
+		{name: "interrupted", connections: 8, interrupted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				count := requests.Add(1)
+				if r.Method != http.MethodGet {
+					w.WriteHeader(http.StatusMethodNotAllowed)
+					return
+				}
+				if count != 1 || r.Header.Get("Range") != "" {
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Accept-Ranges", "bytes")
+				w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+				w.Header().Set("ETag", `"token-download-v1"`)
+				if tc.interrupted {
+					_, _ = w.Write(data[:1024])
+					return
+				}
+				_, _ = w.Write(data)
+			}))
+			defer server.Close()
+
+			m := NewManager(t.TempDir(), 1, 8)
+			req := Request{URL: server.URL + "/multiple-download?token=example", Connections: tc.connections}
+			if size := m.ProbeFileSize(context.Background(), req); size != nil || requests.Load() != 0 {
+				t.Fatal("file-size lookup contacted the token endpoint")
+			}
+			id := m.Add(req)
+			defer m.Cancel(id)
+			want := Done
+			if tc.interrupted {
+				want = ErrorS
+			}
+			for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+				snap := m.Snapshots()[0]
+				if snap.State == Done || snap.State == ErrorS {
+					if snap.State != want || requests.Load() != 1 || snap.EffectiveConnections != 1 || snap.ResumeSafe {
+						t.Fatalf("state = %s, requests = %d, connections = %d, resume safe = %v, error = %q",
+							snap.State, requests.Load(), snap.EffectiveConnections, snap.ResumeSafe, snap.Err)
+					}
+					if want == Done {
+						got, err := os.ReadFile(snap.FilePath)
+						if err != nil || !bytes.Equal(got, data) {
+							t.Fatalf("downloaded file mismatch: size %d, error %v", len(got), err)
+						}
+					}
+					return
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			t.Fatal("download timed out")
+		})
+	}
+}
 
 // A slow first range must remain open while an idle peer starts its tail.
 // The assembled file must still match the original bytes.
